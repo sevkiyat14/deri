@@ -1899,43 +1899,86 @@ function fisSil(idx) {
   render();
 }
 
+// ====== GRUPLAMA — Kod + Kalite (ECO ayrı) ======
+function derilerGrupla(deriler) {
+  const gruplar = {};
+  deriler.forEach(d => {
+    const kal = (d.kalite || d.veri?.kalite?.deger || '').toUpperCase();
+    const isEco = kal.startsWith('ECO');
+    const kod = d.kod || d.veri?.kod?.deger || '?';
+    const key = `${kod}_${isEco ? 'ECO' : 'STD'}`;
+    if (!gruplar[key]) {
+      gruplar[key] = {
+        kod, cins: d.cins || d.veri?.cins?.deger || '?',
+        renk: d.renk || d.veri?.renk?.deger || '?',
+        ecoGrup: isEco, kaliteler: new Set(),
+        toplamAdet: 0, toplamDm2: 0, toplamFt2: 0,
+        fisler: []
+      };
+    }
+    gruplar[key].kaliteler.add(kal);
+    gruplar[key].toplamAdet += d.deriAdedi || d.veri?.deriAdedi?.deger || 0;
+    gruplar[key].toplamDm2  += d.toplamYuzeyDm2 || d.veri?.toplamYuzeyDm2?.deger || 0;
+    gruplar[key].toplamFt2  += d.toplamYuzeyFt2 || d.veri?.toplamYuzeyFt2?.deger || 0;
+    gruplar[key].fisler.push(d);
+  });
+  return Object.values(gruplar).sort((a,b) => {
+    if (a.kod !== b.kod) return (a.kod||'').localeCompare(b.kod||'');
+    return a.ecoGrup ? 1 : -1;
+  });
+}
+
+function grupKartiHtml(g) {
+  const ecoTag = g.ecoGrup
+    ? '<span style="background:var(--amber);color:#000;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:6px">ECO</span>'
+    : '';
+  return `
+    <div class="card" style="border-left:4px solid ${g.ecoGrup ? 'var(--amber)' : 'var(--leather)'};padding:14px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div>
+          <div style="font-weight:700;font-size:15px">${g.cins} · ${g.renk}${ecoTag}</div>
+          <div class="mono" style="font-size:12px;color:var(--ink-soft);margin-top:2px">Kod: ${g.kod} · Kalite: ${[...g.kaliteler].join(', ')}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:11px;color:var(--ink-faint)">${g.fisler.length} fiş</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:16px;margin-top:10px;padding-top:8px;border-top:1px solid var(--line);font-size:14px">
+        <span><b>${g.toplamAdet}</b> <span style="font-size:11px;color:var(--ink-soft)">adet</span></span>
+        <span><b>${g.toplamDm2.toFixed(0)}</b> <span style="font-size:11px;color:var(--ink-soft)">dm²</span></span>
+        <span style="color:var(--ink-faint)">${g.toplamFt2.toFixed(2)} ft²</span>
+      </div>
+    </div>`;
+}
+
 // ====== EKRAN: İNCELEME ======
 function ekranInceleme() {
   const m = state.aktifMusteri;
-  const musteriiBirim = m.tercihBirim || 'dm2';
   const onayli = state.aktifFisler.filter(f => f.durum === 'hazir' || f.durum === 'onaylandi');
   const toplamAdet = onayli.reduce((s, f) => s + (f.veri.deriAdedi.deger || 0), 0);
   const toplamDm2  = onayli.reduce((s, f) => s + (f.veri.toplamYuzeyDm2?.deger || 0), 0);
   const toplamFt2  = onayli.reduce((s, f) => s + (f.veri.toplamYuzeyFt2?.deger || 0), 0);
-  // Ana birim müşteri tercihine göre
-  const toplamAna  = musteriiBirim === 'dm2' ? toplamDm2 : toplamFt2;
-  const toplamIkincil = musteriiBirim === 'dm2' ? toplamFt2 : toplamDm2;
 
-  const fisKartlari = onayli.map(f => {
+  // Grupla — kod + eco ayrımı
+  const grupDeriler = onayli.map(f => f.veri);
+  const gruplar = derilerGrupla(grupDeriler);
+  const stdGruplar = gruplar.filter(g => !g.ecoGrup);
+  const ecoGruplar = gruplar.filter(g => g.ecoGrup);
+  const stdDm2 = stdGruplar.reduce((s,g) => s + g.toplamDm2, 0);
+  const ecoDm2 = ecoGruplar.reduce((s,g) => s + g.toplamDm2, 0);
+
+  const grupHtml = gruplar.map(g => grupKartiHtml(g)).join('');
+
+  // Tek tek fişler (düzenleme için tıklanabilir)
+  const fisListesi = onayli.map(f => {
     const idx = state.aktifFisler.indexOf(f);
     const v = f.veri;
-    const dm2 = v.toplamYuzeyDm2?.deger;
-    const ft2 = v.toplamYuzeyFt2?.deger;
-    // dm² önce, ft² yanında
-    const yuzeyGoster = dm2
-      ? `${dm2.toFixed(0)} dm²${ft2 ? ' · ' + ft2.toFixed(2) + ' ft²' : ''}`
-      : ft2 ? `${ft2.toFixed(2)} ft²` : '?';
-
-    return `
-      <div class="card" onclick="fisDuzelt(${idx})" style="cursor:pointer">
-        <div class="card-row">
-          <div style="flex:1">
-            <div style="font-family:'Fraunces';font-weight:600;font-size:16px">${v.cins.deger} <span style="color:var(--ink-faint);font-weight:400">·</span> ${v.renk.deger}</div>
-            <div class="mono text-muted" style="font-size:12px;margin-top:2px">${v.kod.deger} • Kalite ${v.kalite.deger} • Seri ${v.seriNo.deger}</div>
-            <div class="text-muted mt-2" style="font-size:13px">${v.deriAdedi.deger} adet • ${yuzeyGoster}</div>
-            ${v.dogrulamaUyarilari.length > 0 ? `<div style="color:var(--red);font-size:12px;margin-top:4px">⚠ ${v.dogrulamaUyarilari[0]}</div>` : ''}
-          </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
-            ${f.durum === 'onaylandi' ? '<span style="color:var(--leather);font-size:11px;font-weight:700">✓ ONAYLI</span>' : ''}
-            <span class="conf-chip ${guvenChipSinifi(v.genelGuven)}">%${Math.round(v.genelGuven * 100)}</span>
-          </div>
-        </div>
-      </div>`;
+    return `<div onclick="fisDuzelt(${idx})" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px">
+      <span style="width:24px;color:var(--ink-faint);font-weight:700">${idx+1}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.cins.deger} · ${v.kod.deger} · ${v.kalite.deger}</span>
+      <span class="mono">${v.deriAdedi.deger}ad</span>
+      <span class="mono" style="color:var(--ink-soft)">${(v.toplamYuzeyDm2?.deger||0).toFixed(0)}</span>
+    </div>`;
   }).join('');
 
   return `
@@ -1947,19 +1990,32 @@ function ekranInceleme() {
     <div class="content">
       <div class="summary">
         <div class="customer-name">${m.ad}</div>
-        <div class="code">${m.kod} · Birim: ${musteriiBirim}</div>
+        <div class="code">${m.kod}</div>
         <div class="summary-grid">
           <div class="item"><div class="value">${onayli.length}</div><div class="label">Fiş</div></div>
           <div class="item"><div class="value">${toplamAdet}</div><div class="label">Deri</div></div>
           <div class="item">
             <div class="value">${toplamDm2.toFixed(0)}</div>
-            <div class="label">dm² Toplam</div>
+            <div class="label">dm²</div>
             <div style="font-size:10px;opacity:0.7">${toplamFt2.toFixed(2)} ft²</div>
           </div>
         </div>
+        ${ecoGruplar.length > 0 ? `
+        <div style="display:flex;gap:12px;margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.1);font-size:12px">
+          <span>Standart: <b>${stdDm2.toFixed(0)}</b> dm²</span>
+          <span style="color:var(--amber)">ECO: <b>${ecoDm2.toFixed(0)}</b> dm²</span>
+        </div>` : ''}
       </div>
-      <div class="section-title">Çekilen Fişler (${onayli.length})</div>
-      ${fisKartlari}
+
+      <div class="section-title">Ürün Grupları (${gruplar.length})</div>
+      ${grupHtml}
+
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer;font-size:13px;color:var(--ink-soft);padding:8px 0">📋 Tüm Fişler (${onayli.length}) — düzenlemek için tıklayın</summary>
+        <div style="background:var(--bg-card);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:8px">
+          ${fisListesi}
+        </div>
+      </details>
     </div>
     <div class="bottom-bar">
       <button class="btn secondary" onclick="ekranGit('toplu-cekim');">Daha Çek</button>
@@ -2040,8 +2096,8 @@ function basariDialog(s) {
         <div class="mono text-muted mt-2">${s.sevkiyatNo}</div>
         <div class="text-muted mt-2">${s.toplamAdet} deri • <b>${(s.toplamYuzeyDm2||s.toplamYuzey||0).toFixed(0)} dm²</b> · ${(s.toplamYuzeyFt2||0).toFixed(2)} ft²</div>
       </div>
-      <button class="btn gold mt-3" onclick="pdfUret(${s.id}, 'A4')">A4 PDF İrsaliye</button>
-      <button class="btn secondary mt-2" onclick="pdfUret(${s.id}, 'A5')">A5 PDF İrsaliye</button>
+      <button class="btn gold mt-3" onclick="pdfUret('${s.fsId}', 'A4')">A4 PDF İrsaliye</button>
+      <button class="btn secondary mt-2" onclick="pdfUret('${s.fsId}', 'A5')">A5 PDF İrsaliye</button>
       <button class="btn secondary mt-2" onclick="devamEt()">➕ Aynı Müşteriye Devam</button>
       <button class="btn secondary mt-2" onclick="anaEkranaDon()">✓ Bitir</button>
     </div>`;
@@ -2063,8 +2119,10 @@ function anaEkranaDon() {
 
 // ====== PDF ======
 async function pdfUret(sId, boyut) {
-  const s = state.sevkiyatlar.find(x => x.id === sId);
-  if (!s) return;
+  const s = state.sevkiyatlar.find(x => x.fsId === sId || x.id === sId)
+         || state.yoneticiSevkiyatlar.find(x => x.fsId === sId)
+         || state.aktifSevkiyatDetay;
+  if (!s) { toast('Sevkiyat bulunamadı'); return; }
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF({ unit: 'mm', format: boyut.toLowerCase() });
   const W = pdf.internal.pageSize.getWidth();
@@ -2178,21 +2236,17 @@ function sevkiyatDetayAc(fsId) {
 
 function ekranSevkiyatDetay() {
   const s = state.aktifSevkiyatDetay;
-  const musteriiBirim = s.musteriiBirim || 'dm2';
-  const deriler = s.deriler.map(d => {
-    const dm2 = d.toplamYuzeyDm2 || 0;
-    const ft2 = d.toplamYuzeyFt2 || 0;
-    return `
-    <div class="card"><div class="card-row"><div style="flex:1">
-      <div style="font-family:'Fraunces';font-weight:600;font-size:16px">${d.cins} · ${d.renk}</div>
-      <div class="mono text-muted" style="font-size:12px;margin-top:2px">${d.kod} • Kalite ${d.kalite} • Seri ${d.seriNo}</div>
-      <div class="text-muted mt-2" style="font-size:13px">
-        ${d.deriAdedi} adet •
-        <b>${dm2.toFixed(0)} dm²</b>
-        <span style="color:var(--ink-faint)"> · ${ft2.toFixed(2)} ft²</span>
-      </div>
-    </div></div></div>`;
-  }).join('');
+  if (!s) { geriDon(); return ''; }
+
+  // Grupla
+  const gruplar = derilerGrupla(s.deriler || []);
+  const stdGruplar = gruplar.filter(g => !g.ecoGrup);
+  const ecoGruplar = gruplar.filter(g => g.ecoGrup);
+  const stdDm2 = stdGruplar.reduce((t,g) => t + g.toplamDm2, 0);
+  const ecoDm2 = ecoGruplar.reduce((t,g) => t + g.toplamDm2, 0);
+
+  const grupHtml = gruplar.map(g => grupKartiHtml(g)).join('');
+
   const dm2Top = s.toplamYuzeyDm2 || s.toplamYuzey || 0;
   const ft2Top = s.toplamYuzeyFt2 || 0;
   return `
@@ -2204,9 +2258,9 @@ function ekranSevkiyatDetay() {
     <div class="content">
       <div class="summary">
         <div class="customer-name">${s.musteriAd}</div>
-        <div class="code">${s.musteriKod} • ${tarihFormatla(s.tarih)}</div>
+        <div class="code">${s.musteriKod || ''} • ${tarihFormatla(s.tarih)} • 👤 ${s.personelAd || '?'}</div>
         <div class="summary-grid">
-          <div class="item"><div class="value">${s.deriler.length}</div><div class="label">Fiş</div></div>
+          <div class="item"><div class="value">${(s.deriler||[]).length}</div><div class="label">Fiş</div></div>
           <div class="item"><div class="value">${s.toplamAdet}</div><div class="label">Deri</div></div>
           <div class="item">
             <div class="value">${dm2Top.toFixed(0)}</div>
@@ -2214,15 +2268,98 @@ function ekranSevkiyatDetay() {
             <div style="font-size:10px;opacity:0.7">${ft2Top.toFixed(2)} ft²</div>
           </div>
         </div>
+        ${ecoGruplar.length > 0 ? `
+        <div style="display:flex;gap:12px;margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.1);font-size:12px">
+          <span>Standart: <b>${stdDm2.toFixed(0)}</b> dm²</span>
+          <span style="color:var(--amber)">ECO: <b>${ecoDm2.toFixed(0)}</b> dm²</span>
+        </div>` : ''}
       </div>
+
       <div class="flex gap-2 mb-3">
-        <button class="btn gold btn-small" onclick="pdfUret(${s.id}, 'A4')">A4 PDF</button>
-        <button class="btn secondary btn-small" onclick="pdfUret(${s.id}, 'A5')">A5 PDF</button>
-        <button class="btn danger btn-small" onclick="sevkiyatSil('${s.fsId||s.id}')">Sil</button>
+        <button class="btn gold btn-small" onclick="pdfUret('${s.fsId||s.id}', 'A4')">A4 PDF</button>
+        <button class="btn secondary btn-small" onclick="pdfUret('${s.fsId||s.id}', 'A5')">A5 PDF</button>
+        <button class="btn secondary btn-small" onclick="paylas(state.aktifSevkiyatDetay)">↗ Paylaş</button>
+        ${state.profil?.rol === 'YONETICI' ? `<button class="btn danger btn-small" onclick="sevkiyatSil('${s.fsId}')">🗑 Sil</button>` : ''}
       </div>
-      <div class="section-title">Fişler (${s.deriler.length})</div>
-      ${deriler}
+
+      <div class="section-title">Ürün Grupları (${gruplar.length})</div>
+      ${grupHtml}
+
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer;font-size:13px;color:var(--ink-soft);padding:8px 0">📋 Tüm Fişler (${(s.deriler||[]).length})</summary>
+        ${(s.deriler||[]).map((d,i) => `
+          <div style="padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;display:flex;gap:8px;align-items:center">
+            <span style="width:24px;color:var(--ink-faint);font-weight:700">${i+1}</span>
+            <span style="flex:1">${d.cins} · ${d.renk} · ${d.kalite}</span>
+            <span class="mono">${d.deriAdedi}ad</span>
+            <span class="mono" style="font-weight:700">${(d.toplamYuzeyDm2||0).toFixed(0)}</span>
+            <span class="mono" style="color:var(--ink-faint);font-size:11px">${(d.toplamYuzeyFt2||0).toFixed(2)}</span>
+          </div>`).join('')}
+      </details>
     </div>`;
+}
+
+// ====== RAPOR GÖNDERME ======
+function raporGonder(tip) {
+  const sevk = state.yoneticiSevkiyatlar || [];
+  let filtre, baslik;
+  const bugun = new Date(); bugun.setHours(0,0,0,0);
+
+  if (tip === 'bugun') {
+    filtre = sevk.filter(s => s.tarih >= bugun.getTime());
+    baslik = `Günlük Sevkiyat Raporu — ${tarihFormatla(Date.now())}`;
+  } else if (tip === 'hafta') {
+    const haftaBasi = new Date(); haftaBasi.setDate(haftaBasi.getDate()-6); haftaBasi.setHours(0,0,0,0);
+    filtre = sevk.filter(s => s.tarih >= haftaBasi.getTime());
+    baslik = `Haftalık Rapor — ${tarihKisa(haftaBasi.getTime())} → ${tarihKisa(Date.now())}`;
+  } else {
+    filtre = sevk;
+    baslik = `Tüm Sevkiyatlar Raporu`;
+  }
+
+  if (filtre.length === 0) { toast('Rapor için veri yok'); return; }
+
+  const topAdet = filtre.reduce((s,x) => s + (x.toplamAdet||0), 0);
+  const topDm2  = filtre.reduce((s,x) => s + (x.toplamYuzeyDm2||0), 0);
+  const topFt2  = filtre.reduce((s,x) => s + (x.toplamYuzeyFt2||0), 0);
+
+  // Müşteri bazlı özet
+  const mOzet = {};
+  filtre.forEach(s => {
+    if (!mOzet[s.musteriAd]) mOzet[s.musteriAd] = {ad:s.musteriAd, adet:0, dm2:0, ft2:0, sayim:0};
+    mOzet[s.musteriAd].adet += s.toplamAdet||0;
+    mOzet[s.musteriAd].dm2  += s.toplamYuzeyDm2||0;
+    mOzet[s.musteriAd].ft2  += s.toplamYuzeyFt2||0;
+    mOzet[s.musteriAd].sayim += 1;
+  });
+
+  // Kod bazlı toplam (ECO ayrı)
+  const tDeriler = filtre.flatMap(s => s.deriler || []);
+  const gruplar = derilerGrupla(tDeriler);
+
+  let metin = `${baslik}\n${'='.repeat(40)}\n\n`;
+  metin += `GENEL TOPLAM\n`;
+  metin += `  Sevkiyat: ${filtre.length}\n  Deri: ${topAdet}\n  Yüzey: ${topDm2.toFixed(0)} dm² / ${topFt2.toFixed(2)} ft²\n\n`;
+
+  metin += `MÜŞTERİ BAZLI\n${'-'.repeat(30)}\n`;
+  Object.values(mOzet).sort((a,b)=>b.dm2-a.dm2).forEach(m => {
+    metin += `  ${m.ad}: ${m.adet} deri, ${m.dm2.toFixed(0)} dm² (${m.sayim} sevkiyat)\n`;
+  });
+
+  metin += `\nÜRÜN BAZLI\n${'-'.repeat(30)}\n`;
+  gruplar.forEach(g => {
+    metin += `  ${g.kod} ${g.cins} ${g.ecoGrup?'[ECO]':''}: ${g.toplamAdet} deri, ${g.toplamDm2.toFixed(0)} dm²\n`;
+  });
+
+  const konu = encodeURIComponent(baslik);
+  const govde = encodeURIComponent(metin);
+
+  // Paylaşım seçenekleri
+  if (navigator.share) {
+    navigator.share({ title: baslik, text: metin }).catch(() => {});
+  } else {
+    window.open(`mailto:?subject=${konu}&body=${govde}`, '_blank');
+  }
 }
 
 async function yoneticiSifirla() {
@@ -2346,7 +2483,8 @@ function ekranYonetici() {
       <div style="font-size:12px;color:var(--ink-faint);text-align:center;margin-bottom:12px">${topFt2.toFixed(2)} ft²</div>
       <div class="section-title">Bugünkü Sevkiyatlar</div>
       ${bugunSevk.length === 0 ? '<div class="empty"><div class="icon">📭</div><div>Bugün henüz sevkiyat yok</div></div>' :
-        bugunSevk.slice().reverse().map(s => sevkiyatKarti(s)).join('')}`;
+        bugunSevk.slice().reverse().map(s => sevkiyatKarti(s)).join('')}
+      ${bugunSevk.length > 0 ? `<button class="btn secondary" style="margin-top:12px;width:100%" onclick="raporGonder('bugun')">📧 Günlük Rapor Gönder</button>` : ''}`;
 
   } else if (state.yoneticiSekme === 'hafta') {
     const haftaBasi = new Date(); haftaBasi.setDate(haftaBasi.getDate()-6); haftaBasi.setHours(0,0,0,0);
@@ -2361,7 +2499,8 @@ function ekranYonetici() {
         ${kartOzet('dm²', topDm2.toFixed(0), '📐')}
       </div>
       <div class="section-title">Son 7 Gün</div>
-      ${haftaSevk.slice().reverse().map(s => sevkiyatKarti(s)).join('')}`;
+      ${haftaSevk.slice().reverse().map(s => sevkiyatKarti(s)).join('')}
+      ${haftaSevk.length > 0 ? `<button class="btn secondary" style="margin-top:12px;width:100%" onclick="raporGonder('hafta')">📧 Haftalık Rapor Gönder</button>` : ''}`;
 
   } else if (state.yoneticiSekme === 'musteri') {
     const mMap = {};
