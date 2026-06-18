@@ -2078,23 +2078,14 @@ async function sevkiyatKaydet() {
     const v = f.veri;
     const olcumToplam = (v.yuzeyDegerleri || []).reduce((s, y) => s + y.deger, 0);
     const beklenen = v.birim === 'dm2' ? (v.toplamYuzeyDm2?.deger || 0) : (v.toplamYuzeyFt2?.deger || 0);
-    if (beklenen > 0 && Math.round(olcumToplam * 10) !== Math.round(beklenen * 10)) return true;
+    // Yalnızca tek tek ölçüm GİRİLMİŞSE toplam tutarlılığını kontrol et
+    if (v.yuzeyDegerleri.length > 0 && beklenen > 0 && Math.round(olcumToplam * 10) !== Math.round(beklenen * 10)) return true;
     if (v.deriAdedi.deger > 0 && v.yuzeyDegerleri.length > 0 && v.yuzeyDegerleri.length !== v.deriAdedi.deger) return true;
     return false;
   });
   if (sorunlu.length > 0) {
-    state._kayitYapiliyor = false;
-    toast(`❌ ${sorunlu.length} fişte hata var — önce düzeltin`, 4000);
+    toast(`❌ ${sorunlu.length} fişte ölçüm tutarsızlığı var — önce düzeltin`, 4000);
     return;
-  }
-
-  // Doğrulama gerekiyor işaretli fişler var mı?
-  const dogrulamaGerekli = onayli.filter(f => f.dogrulamaGerek);
-  if (dogrulamaGerekli.length > 0) {
-    if (!confirm(`⚠ ${dogrulamaGerekli.length} fiş doğrulama gerektiriyor (eksik cins/renk/adet). Yine de kaydetmek istiyor musunuz?`)) {
-      state._kayitYapiliyor = false;
-      return;
-    }
   }
 
   const m = state.aktifMusteri;
