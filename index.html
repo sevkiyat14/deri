@@ -473,7 +473,7 @@ function claudeJsonToInternal(json) {
     barkod: alan(json.barkod),
     deriAdedi: { deger: json.deriAdedi || 0, guven: json.deriAdedi ? 0.95 : 0 },
     toplamYuzeyDm2: sayiAlan(json.toplamYuzeyDm2),
-    toplamYuzeyFt2: { deger: json.toplamYuzeyFt2 || 0, guven: json.toplamYuzeyFt2 ? 0.95 : 0 },
+    toplamYuzeyFt2: sayiAlan(json.toplamYuzeyFt2),
     ortalamaAlanDm2: sayiAlan(json.ortalamaAlanDm2),
     ortalamaAlanFt2: sayiAlan(json.ortalamaAlanFt2),
     yuzeyDegerleri: (json.yuzeyOlcumleri || []).map(y => ({
@@ -500,9 +500,9 @@ function dogrula(veri) {
   if (veri.deriAdedi.deger > 0 && veri.yuzeyDegerleri.length !== veri.deriAdedi.deger) {
     uyarilar.push(`Ölçüm sayısı (${veri.yuzeyDegerleri.length}) ≠ Deri Adedi (${veri.deriAdedi.deger})`);
   }
-  // ft²'yi dm²'den hesapla eğer eksikse
-  if (!veri.toplamYuzeyFt2.deger && veri.toplamYuzeyDm2.deger) {
-    veri.toplamYuzeyFt2.deger = veri.toplamYuzeyDm2.deger / 9.2903;
+  // ft²'yi dm²'den hesapla eğer gerçekten eksikse (null, sıfır değil)
+  if ((veri.toplamYuzeyFt2.deger == null || veri.toplamYuzeyFt2.deger === 0) && veri.toplamYuzeyDm2.deger) {
+    veri.toplamYuzeyFt2.deger = parseFloat((veri.toplamYuzeyDm2.deger / 9.2903).toFixed(2));
     veri.toplamYuzeyFt2.guven = 0.9;
   }
   veri.dogrulamaUyarilari = uyarilar;
@@ -680,9 +680,12 @@ const FisParser = {
 
   barkodCikar(satirlar) {
     for (const s of satirlar) {
+      // Seri no satırlarını atla
+      if (/T\s*\d\s*N\b/i.test(s) || /N\.\s*0{3,}/i.test(s)) continue;
       const t = s.replace(/[^0-9]/g,'');
       const m = t.match(/(\d{10,14})/);
-      if (m) return { deger: m[1], guven: 0.85, ham: s, duzeltildi: false };
+      // Başı 5'ten fazla sıfırla başlayan dizi seri no'dur, barkod değil
+      if (m && !/^0{5,}/.test(m[1])) return { deger: m[1], guven: 0.85, ham: s, duzeltildi: false };
     }
     return { deger: '', guven: 0, ham: '', duzeltildi: false };
   },
@@ -702,7 +705,7 @@ const FisParser = {
   ft2Bul(satir) {
     let m = satir.match(/([\d]+[.,]?[\d]*)\s*(?:ft[2²]|FT2)/i);
     if (m) return parseFloat(m[1].replace(',','.'));
-    m = satir.match(/([\d]+[.,][\d]+)\s*t[2²]/i);
+    m = satir.match(/([\d]+[.,][\d]+)\s*t[2²]\b/i);
     if (m) return parseFloat(m[1].replace(',','.'));
     const dm = satir.match(/([\d.]+)\s*dm[2²]/i);
     if (dm) {
@@ -783,14 +786,16 @@ const FisParser = {
       }
     }
 
+    // G.N. hiç bulunamadıysa → tüm sayıları ölçüm olarak yorumla
+    if (sonuc.length === 0 && tumSayilar.length > 0) {
+      const olcumler = tumSayilar.filter(n => n > 0 && n <= MAX);
+      olcumler.forEach((n, i) => sonuc.push({ grupNo: 1, sira: i + 1, deger: n }));
+    }
+
     // Eğer deri adedi biliniyorsa ve sayı tutmuyorsa düzeltmeyi dene
     if (deriAdedi > 0 && sonuc.length !== deriAdedi && sonuc.length > 0) {
       // Fazla ölçüm var: muhtemelen bir G.N. değeri ölçüm sayıldı
-      // Deri adedine göre kırp (son fazlalığı çıkar)
-      if (sonuc.length === deriAdedi + 1) {
-        // En küçük değer muhtemelen yanlış → ama kullanıcı düzeltir, dokunma
-        // Sadece uyarı için bırak, kayıt engelleme logic'i dışarıda
-      }
+      // Sadece uyarı için bırak, kayıt engelleme logic'i dışarıda
     }
 
     return sonuc;
@@ -906,7 +911,7 @@ function aiJsonToInternal(json) {
     seriNo: a(json.seriNo), barkod: a(json.barkod),
     deriAdedi: { deger: json.deriAdedi || 0, guven: json.deriAdedi ? 0.95 : 0, ham:'', duzeltildi: false },
     toplamYuzeyDm2: { deger: json.toplamYuzeyDm2 ?? null, guven: json.toplamYuzeyDm2 ? 0.95 : 0, ham:'', duzeltildi: false },
-    toplamYuzeyFt2: { deger: json.toplamYuzeyFt2 || 0, guven: json.toplamYuzeyFt2 ? 0.95 : 0, ham:'', duzeltildi: false },
+    toplamYuzeyFt2: { deger: json.toplamYuzeyFt2 ?? null, guven: json.toplamYuzeyFt2 != null ? 0.95 : 0, ham:'', duzeltildi: false },
     ortalamaAlanDm2: { deger: json.ortalamaAlanDm2 ?? null, guven: json.ortalamaAlanDm2 ? 0.95 : 0, ham:'', duzeltildi: false },
     ortalamaAlanFt2: { deger: json.ortalamaAlanFt2 ?? null, guven: json.ortalamaAlanFt2 ? 0.95 : 0, ham:'', duzeltildi: false },
     yuzeyDegerleri: (json.yuzeyOlcumleri || []).map(y => ({ grupNo: y.grupNo||1, sira: y.sira||1, deger: y.deger })),
@@ -1111,7 +1116,7 @@ function ekranMusteriListesi() {
       </div>
       ${isYonetici ? `<div style="position:absolute;top:8px;right:8px;display:flex;gap:4px">
         <button onclick="event.stopPropagation();musteriDuzenle(${m.id})" style="font-size:11px;padding:3px 8px;background:var(--bg-soft);border:1px solid var(--line);border-radius:6px;cursor:pointer">✏</button>
-        <button onclick="event.stopPropagation();musteriSil(${m.id})" style="font-size:11px;padding:3px 8px;background:none;border:1px solid var(--red);color:var(--red);border-radius:6px;cursor:pointer">✕</button>
+        <button onclick="event.stopPropagation();musteriSilOnay(${m.id}, ${JSON.stringify(m.ad)})" style="font-size:11px;padding:3px 8px;background:none;border:1px solid var(--red);color:var(--red);border-radius:6px;cursor:pointer">✕</button>
       </div>` : ''}
     </div>
   `).join('');
@@ -1206,8 +1211,8 @@ async function ayarlarDialog() {
     const satirlar = Object.entries(harita)
       .sort((a, b) => b[1].sayim - a[1].sayim)
       .map(([kod, b]) => `<div style="padding:3px 0;border-bottom:1px solid var(--line)">
-        <b class="mono">${kod}</b> — ${b.cins || '?'} / ${b.renk || '?'}
-        <span style="color:var(--ink-faint)">(${b.sayim}x)</span>
+        <b class="mono">${escapeHtml(kod)}</b> — ${escapeHtml(b.cins || '?')} / ${escapeHtml(b.renk || '?')}
+        <span style="color:var(--ink-faint)">(${Number(b.sayim)}x)</span>
       </div>`).join('');
     el.innerHTML = satirlar;
   });
@@ -1334,8 +1339,11 @@ async function musteriDuzenle(id) {
 async function musteriGuncelle(id) {
   const m = state.musteriler.find(x => x.id === id);
   if (!m) return;
-  m.ad = document.getElementById('me-ad').value.trim();
-  m.kod = document.getElementById('me-kod').value.trim();
+  const yeniAd  = document.getElementById('me-ad').value.trim();
+  const yeniKod = document.getElementById('me-kod').value.trim();
+  if (!yeniAd || !yeniKod) { toast('Ad ve kod zorunlu'); return; }
+  m.ad  = yeniAd;
+  m.kod = yeniKod;
   m.telefon = document.getElementById('me-tel').value.trim();
   m.tercihBirim = document.querySelector('input[name="me-birim"]:checked')?.value || 'dm2';
   try {
@@ -1364,6 +1372,17 @@ async function tumSevkiyatlariSil() {
   if (!confirm('Son şans — geri alınamaz! Devam?')) return;
   try {
     const snap = await db.collection('sevkiyatlar').get();
+    // Her sevkiyatın fotograflar alt koleksiyonunu da sil
+    for (const doc of snap.docs) {
+      if ((doc.data().fotoSayisi || 0) > 0) {
+        const fotoSnap = await doc.ref.collection('fotograflar').get();
+        if (!fotoSnap.empty) {
+          const fb = db.batch();
+          fotoSnap.docs.forEach(f => fb.delete(f.ref));
+          await fb.commit();
+        }
+      }
+    }
     const batch = db.batch();
     snap.docs.forEach(d => batch.delete(d.ref));
     await batch.commit();
@@ -1392,8 +1411,8 @@ function musteriAra(arama) {
   const f = !arama ? state.musteriler : state.musteriler.filter(m => m.ad.toLowerCase().includes(lc) || m.kod.toLowerCase().includes(lc));
   const html = f.map(m => `
     <div class="customer-item" onclick="musteriSec(${m.id})">
-      <div class="avatar">${m.ad.charAt(0).toUpperCase()}</div>
-      <div class="info"><div class="name">${m.ad}</div><div class="meta">${m.kod}</div></div>
+      <div class="avatar">${escapeHtml(m.ad.charAt(0).toUpperCase())}</div>
+      <div class="info"><div class="name">${escapeHtml(m.ad)}</div><div class="meta">${escapeHtml(m.kod)}</div></div>
       <div style="color:var(--ink-faint);font-size:20px;">›</div>
     </div>`).join('');
   document.getElementById('musteri-liste').innerHTML = html || '<div class="empty">Sonuç yok</div>';
@@ -1436,7 +1455,7 @@ async function yeniMusteriKaydet() {
   const telefon = document.getElementById('m-tel').value.trim();
   const tercihBirim = document.querySelector('input[name="m-birim"]:checked')?.value || 'dm2';
   if (!ad || !kod) { toast('Ad ve kod zorunlu'); return; }
-  const id = await Storage.nextId('musteri');
+  const id = Date.now(); // Race condition-free; ms precision yeterli
   const m = { id, ad, kod, telefon, tercihBirim, olusturma: Date.now() };
   // Firestore'a kaydet (tek kaynak)
   try {
@@ -1481,7 +1500,7 @@ function ekranTopluCekim() {
     } else if (f.durum === 'hata') {
       return `<div onclick="fisDuzelt(${idx})" style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);background:rgba(220,38,38,0.08);border-left:3px solid var(--red);cursor:pointer">
         <div style="width:28px;text-align:center;font-weight:700;color:var(--red)">${sira}</div>
-        <div style="flex:1;font-size:13px;color:var(--red)">⚠ ${(f.hata || 'Hata').substring(0, 50)}</div>
+        <div style="flex:1;font-size:13px;color:var(--red)">⚠ ${escapeHtml((f.hata || 'Hata').substring(0, 50))}</div>
       </div>`;
     }
 
@@ -1797,9 +1816,9 @@ function fisDuzeltModal(fis) {
 
       ${fis.hamMetin ? `<details class="mt-3"><summary style="cursor:pointer;font-size:12px;color:var(--ink-faint)">OCR ham çıktısı</summary><pre style="font-size:11px;overflow:auto;max-height:120px;margin-top:6px;background:var(--ink);color:#d6c8a8;padding:8px;border-radius:6px">${escapeHtml(fis.hamMetin)}</pre></details>` : ''}
       <div class="flex gap-2 mt-4">
-        <button class="btn danger btn-small" onclick="fisSil(${state.aktifFisIdx})">Sil</button>
+        <button class="btn danger btn-small" onclick="fisSil(state.aktifFisIdx)">Sil</button>
         <button class="btn secondary" onclick="document.querySelector('.modal-bg').remove()">Kapat</button>
-        <button class="btn green" onclick="fisOnaylaVeDevam(${state.aktifFisIdx})" style="flex:2">✓ Onayla → Sonraki</button>
+        <button class="btn green" onclick="fisOnaylaVeDevam(state.aktifFisIdx)" style="flex:2">✓ Onayla → Sonraki</button>
       </div>
     </div>`;
   mbg.onclick = () => mbg.remove();
@@ -1807,7 +1826,12 @@ function fisDuzeltModal(fis) {
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // ====== YÜZEY ÖLÇÜM YARDIMCILARI ======
@@ -1861,14 +1885,14 @@ function yuzeyKaldir() {
   }
 }
 
-// Seri çekim: Onayla → modalı kapat → kamerayı aç
+// Seri çekim: Onayla → modalı kapat → kamerayı aç (sadece toplu-cekim ekranındaysa)
 async function fisOnaylaVeDevam(idx) {
   await fisOnayla(idx);
-  // Kamerayı tekrar aç
+  if (state.ekran !== 'toplu-cekim') return;
   setTimeout(() => {
     const kameraInput = document.getElementById('kamera-input');
     if (kameraInput) {
-      kameraInput.value = '';  // Reset input
+      kameraInput.value = '';
       kameraInput.click();
       titret(40);
     }
@@ -2048,7 +2072,7 @@ async function sevkiyatKaydet() {
   // ⛔ Çift tıklama engeli
   if (state._kayitYapiliyor) return;
   state._kayitYapiliyor = true;
-
+  try {
   // ⛔ KAYIT ENGELİ: Toplam veya adet tutmayan fişleri engelle
   const sorunlu = onayli.filter(f => {
     const v = f.veri;
@@ -2062,6 +2086,15 @@ async function sevkiyatKaydet() {
     state._kayitYapiliyor = false;
     toast(`❌ ${sorunlu.length} fişte hata var — önce düzeltin`, 4000);
     return;
+  }
+
+  // Doğrulama gerekiyor işaretli fişler var mı?
+  const dogrulamaGerekli = onayli.filter(f => f.dogrulamaGerek);
+  if (dogrulamaGerekli.length > 0) {
+    if (!confirm(`⚠ ${dogrulamaGerekli.length} fiş doğrulama gerektiriyor (eksik cins/renk/adet). Yine de kaydetmek istiyor musunuz?`)) {
+      state._kayitYapiliyor = false;
+      return;
+    }
   }
 
   const m = state.aktifMusteri;
@@ -2121,7 +2154,9 @@ async function sevkiyatKaydet() {
   } catch(e) {
     toast('❌ Kayıt hatası: ' + e.message, 4000);
   }
-  state._kayitYapiliyor = false;
+  } finally {
+    state._kayitYapiliyor = false;
+  }
 }
 
 function basariDialog(s) {
@@ -2419,6 +2454,14 @@ async function yoneticiSifirla() {
   try {
     if (secim === '1' || secim === '3') {
       const snap = await db.collection('sevkiyatlar').get();
+      for (const doc of snap.docs) {
+        if ((doc.data().fotoSayisi || 0) > 0) {
+          const fotoSnap = await doc.ref.collection('fotograflar').get();
+          if (!fotoSnap.empty) {
+            const fb = db.batch(); fotoSnap.docs.forEach(f => fb.delete(f.ref)); await fb.commit();
+          }
+        }
+      }
       const batch = db.batch();
       snap.docs.forEach(d => batch.delete(d.ref));
       await batch.commit();
@@ -2480,7 +2523,7 @@ async function fotograflariGoster(fsId) {
           <div style="padding:4px 8px;font-size:11px;color:var(--ink-faint);text-align:center">Fiş ${i+1}</div>
         </div>`).join('') + '</div>';
   } catch(e) {
-    alan.innerHTML = '<div style="padding:12px;color:var(--red);font-size:13px">Fotoğraflar yüklenemedi: ' + e.message + '</div>';
+    alan.innerHTML = '<div style="padding:12px;color:var(--red);font-size:13px">Fotoğraflar yüklenemedi: ' + escapeHtml(e.message) + '</div>';
   }
 }
 
@@ -2520,6 +2563,13 @@ async function eskiFotograflariTemizle() {
 async function sevkiyatSil(fsId) {
   if (!confirm('Bu sevkiyat kalıcı olarak silinecek. Emin misiniz?')) return;
   try {
+    // Alt koleksiyon fotograflar'ı da sil
+    const fotoSnap = await db.collection('sevkiyatlar').doc(fsId).collection('fotograflar').get();
+    if (!fotoSnap.empty) {
+      const batch = db.batch();
+      fotoSnap.docs.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+    }
     await db.collection('sevkiyatlar').doc(fsId).delete();
     toast('✓ Sevkiyat silindi');
     geriDon();
@@ -2757,7 +2807,11 @@ async function personelEkle() {
   sonEl.textContent = 'Ekleniyor...';
   try {
     // Geçici ikincil auth ile hesap aç (mevcut yönetici oturumu korunur)
-    const ikincilApp = firebase.initializeApp(firebase.apps[0].options, 'personelEkle_' + Date.now());
+    // Sabit isim kullan; varsa mevcut uygulamayı al, yoksa yenisini oluştur
+    const appName = 'personelEkleTemp';
+    let ikincilApp;
+    try { ikincilApp = firebase.app(appName); }
+    catch(e) { ikincilApp = firebase.initializeApp(firebase.apps[0].options, appName); }
     const ikincilAuth = ikincilApp.auth();
     const cred = await ikincilAuth.createUserWithEmailAndPassword(mail, sifre);
     const uid  = cred.user.uid;
@@ -2767,7 +2821,7 @@ async function personelEkle() {
     ['pers-ad','pers-mail','pers-sifre'].forEach(id => document.getElementById(id).value = '');
     sonEl.innerHTML = `<span style="color:var(--green)">✓ ${ad} eklendi</span>`;
   } catch(e) {
-    sonEl.innerHTML = `<span style="color:red">Hata: ${e.message}</span>`;
+    sonEl.innerHTML = `<span style="color:red">Hata: ${escapeHtml(e.message)}</span>`;
   }
 }
 
@@ -2820,8 +2874,8 @@ async function kullaniciListesiYukle() {
           <div style="display:flex;align-items:center;gap:10px">
             <div style="font-size:28px">${rolIcon}</div>
             <div style="flex:1">
-              <div style="font-weight:700;font-size:15px">${k.ad || '?'}</div>
-              <div style="font-size:12px;color:var(--ink-faint)">@${kullaniciAdiGoster(k.email)} · ${k.rol}</div>
+              <div style="font-weight:700;font-size:15px">${escapeHtml(k.ad || '?')}</div>
+              <div style="font-size:12px;color:var(--ink-faint)">@${escapeHtml(kullaniciAdiGoster(k.email))} · ${escapeHtml(k.rol)}</div>
               <div style="margin-top:2px">${durum}</div>
             </div>
           </div>
@@ -2836,7 +2890,7 @@ async function kullaniciListesiYukle() {
         </div>`;
     }).join('');
   } catch(e) {
-    el.innerHTML = '<div style="color:var(--red);padding:12px">Hata: ' + e.message + '</div>';
+    el.innerHTML = '<div style="color:var(--red);padding:12px">Hata: ' + escapeHtml(e.message) + '</div>';
   }
 }
 
@@ -2940,34 +2994,49 @@ async function basla() {
   });
 }
 
-function ilkKurulumGoster(user) {
+async function ilkKurulumGoster(user) {
   state.ekran = 'ilk-kurulum';
+  // Mevcut admin var mı? Varsa YONETICI seçeneği gösterilmez
+  let adminVarMi = false;
+  try {
+    const snap = await db.collection('users').where('rol', '==', 'YONETICI').limit(1).get();
+    adminVarMi = !snap.empty;
+  } catch(e) { /* Firestore erişim hatası → güvenli taraf: admin var say */ adminVarMi = true; }
+
+  const rolSecenegi = adminVarMi
+    ? `<div class="info-box" style="margin-bottom:8px">
+        <div class="title">👤 Personel Hesabı</div>
+        <div>Bu hesap personel olarak kaydedilecek. Yönetici rolü sadece mevcut bir yönetici tarafından değiştirilebilir.</div>
+       </div>
+       <input type="hidden" name="ilk-rol" value="PERSONEL">`
+    : `<div class="input-group">
+        <label class="input-label">Bu hesabın rolü</label>
+        <div style="display:flex;gap:8px">
+          <label style="display:flex;align-items:center;gap:8px;padding:14px;border:2px solid var(--leather);border-radius:10px;flex:1;cursor:pointer;background:var(--gold-soft)">
+            <input type="radio" name="ilk-rol" value="YONETICI" checked>
+            <div><div style="font-weight:700;font-size:16px">👑 Yönetici</div><div style="font-size:12px;color:var(--ink-soft)">Tüm verilere erişim, raporlar</div></div>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:14px;border:1px solid var(--line);border-radius:10px;flex:1;cursor:pointer">
+            <input type="radio" name="ilk-rol" value="PERSONEL">
+            <div><div style="font-weight:700;font-size:16px">👤 Personel</div><div style="font-size:12px;color:var(--ink-soft)">Sadece sevkiyat kaydı</div></div>
+          </label>
+        </div>
+       </div>`;
+
   const app = document.getElementById('app');
   app.innerHTML = `
     <div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;background:var(--bg)">
       <div style="text-align:center;margin-bottom:32px">
         <div style="font-size:48px;margin-bottom:12px">⚙</div>
         <h2 style="font-family:'Fraunces',serif">İlk Kurulum</h2>
-        <div style="color:var(--ink-soft);font-size:14px;margin-top:8px">👤 ${kullaniciAdiGoster(user.email)}</div>
+        <div style="color:var(--ink-soft);font-size:14px;margin-top:8px">👤 ${escapeHtml(kullaniciAdiGoster(user.email))}</div>
       </div>
       <div style="width:100%;max-width:360px">
         <div class="input-group">
           <label class="input-label">Ad Soyad</label>
           <input class="input" id="ilk-ad" placeholder="Adınız Soyadınız">
         </div>
-        <div class="input-group">
-          <label class="input-label">Bu hesabın rolü</label>
-          <div style="display:flex;gap:8px">
-            <label style="display:flex;align-items:center;gap:8px;padding:14px;border:2px solid var(--leather);border-radius:10px;flex:1;cursor:pointer;background:var(--gold-soft)">
-              <input type="radio" name="ilk-rol" value="YONETICI" checked>
-              <div><div style="font-weight:700;font-size:16px">👑 Yönetici</div><div style="font-size:12px;color:var(--ink-soft)">Tüm verilere erişim, raporlar</div></div>
-            </label>
-            <label style="display:flex;align-items:center;gap:8px;padding:14px;border:1px solid var(--line);border-radius:10px;flex:1;cursor:pointer">
-              <input type="radio" name="ilk-rol" value="PERSONEL">
-              <div><div style="font-weight:700;font-size:16px">👤 Personel</div><div style="font-size:12px;color:var(--ink-soft)">Sadece sevkiyat kaydı</div></div>
-            </label>
-          </div>
-        </div>
+        ${rolSecenegi}
         <div id="ilk-hata" style="color:var(--red);font-size:13px;margin-bottom:8px;display:none"></div>
         <button class="btn" style="background:var(--leather-dark);margin-top:12px" onclick="ilkKurulumKaydet()">Kaydet ve Devam Et</button>
         <button class="btn secondary" style="margin-top:8px" onclick="auth.signOut()">Farklı Hesap</button>
@@ -2977,7 +3046,8 @@ function ilkKurulumGoster(user) {
 
 async function ilkKurulumKaydet() {
   const ad  = document.getElementById('ilk-ad').value.trim();
-  const rol = document.querySelector('input[name="ilk-rol"]:checked')?.value || 'PERSONEL';
+  const rolEl = document.querySelector('input[name="ilk-rol"]:checked') || document.querySelector('input[name="ilk-rol"][type="hidden"]');
+  const rol = rolEl?.value || 'PERSONEL';
   const hataEl = document.getElementById('ilk-hata');
   if (!ad) { hataEl.textContent='Ad Soyad zorunlu'; hataEl.style.display='block'; return; }
   hataEl.style.display='none';
