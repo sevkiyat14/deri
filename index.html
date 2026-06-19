@@ -2068,35 +2068,22 @@ function ekranInceleme() {
 async function sevkiyatKaydet() {
   const onayli = state.aktifFisler.filter(f => f.durum === 'hazir' || f.durum === 'onaylandi');
   if (onayli.length === 0) { toast('Kayıt edilecek onaylı fiş yok', 2000); return; }
-
-  // ⛔ Çift tıklama engeli
   if (state._kayitYapiliyor) return;
   state._kayitYapiliyor = true;
-  toast('⏳ Kaydediliyor...', 2000);
-  try {
-    // ⛔ KAYIT ENGELİ: Toplam veya adet tutmayan fişleri engelle
-    const sorunlu = onayli.filter(f => {
-      try {
-        const v = f.veri;
-        const yd = v.yuzeyDegerleri || [];
-        const olcumToplam = yd.reduce((s, y) => s + (y.deger || 0), 0);
-        const beklenen = v.birim === 'dm2' ? (v.toplamYuzeyDm2?.deger || 0) : (v.toplamYuzeyFt2?.deger || 0);
-        if (yd.length > 0 && beklenen > 0 && Math.round(olcumToplam * 10) !== Math.round(beklenen * 10)) return true;
-        if ((v.deriAdedi?.deger || 0) > 0 && yd.length > 0 && yd.length !== v.deriAdedi.deger) return true;
-        return false;
-      } catch(e) { return false; }
-    });
-    if (sorunlu.length > 0) {
-      toast(`❌ ${sorunlu.length} fişte ölçüm tutarsızlığı var — önce düzeltin`, 4000);
-      return;
-    }
+  toast('⏳ Kaydediliyor...', 5000);
 
+  try {
     const m = state.aktifMusteri;
-    if (!m) { toast('❌ Aktif müşteri bulunamadı', 3000); return; }
+    if (!m) throw new Error('Aktif müşteri bulunamadı');
+
+    // Giriş kontrolü
+    const uid = state.kullanici?.uid;
+    if (!uid) throw new Error('Oturum açık değil — lütfen tekrar giriş yapın');
+
     const musteriiBirim = m.tercihBirim || 'dm2';
-    const toplamAdet = onayli.reduce((s, f) => s + (f.veri.deriAdedi?.deger || 0), 0);
-    const toplamDm2  = onayli.reduce((s, f) => s + (f.veri.toplamYuzeyDm2?.deger || 0), 0);
-    const toplamFt2  = onayli.reduce((s, f) => s + (f.veri.toplamYuzeyFt2?.deger || 0), 0);
+    const toplamAdet = onayli.reduce((s, f) => s + (f.veri?.deriAdedi?.deger || 0), 0);
+    const toplamDm2  = onayli.reduce((s, f) => s + (f.veri?.toplamYuzeyDm2?.deger || 0), 0);
+    const toplamFt2  = onayli.reduce((s, f) => s + (f.veri?.toplamYuzeyFt2?.deger || 0), 0);
 
     // Fotoğrafları sıkıştır
     const deriler = await Promise.all(onayli.map(async f => {
@@ -2104,7 +2091,7 @@ async function sevkiyatKaydet() {
       if (f.foto) {
         try { foto = await fotoSikistir(f.foto, 600, 0.45); } catch(e) {}
       }
-      const v = f.veri;
+      const v = f.veri || {};
       return {
         cins: v.cins?.deger || '', renk: v.renk?.deger || '', kod: v.kod?.deger || '',
         kalite: v.kalite?.deger || '', seriNo: v.seriNo?.deger || '', barkod: v.barkod?.deger || '',
@@ -2118,12 +2105,12 @@ async function sevkiyatKaydet() {
 
     const sevkiyat = {
       sevkiyatNo: state.oturumNo,
-      musteriId: m.id, musteriAd: m.ad, musteriKod: m.kod,
+      musteriId: m.id, musteriAd: m.ad, musteriKod: m.kod || '',
       musteriiBirim,
       tarih: Date.now(), durum: 'TAMAMLANDI',
       toplamAdet, toplamYuzeyDm2: toplamDm2, toplamYuzeyFt2: toplamFt2,
       toplamYuzey: toplamDm2,
-      personelId: state.kullanici?.uid || 'bilinmiyor',
+      personelId: uid,
       personelAd: state.profil?.ad || state.kullanici?.email || 'Bilinmiyor',
       kontrolDurumu: 'beklemede',
       deriler
@@ -2134,6 +2121,7 @@ async function sevkiyatKaydet() {
     sevkiyat.deriler = sevkiyat.deriler.map(d => { const { foto, ...rest } = d; return rest; });
     sevkiyat.fotoSayisi = fotograflar.length;
 
+    // Firestore'a kaydet
     const docRef = await db.collection('sevkiyatlar').add(sevkiyat);
 
     for (let i = 0; i < fotograflar.length; i++) {
@@ -2142,14 +2130,29 @@ async function sevkiyatKaydet() {
           foto: fotograflar[i], tarih: Date.now(), sira: i
         });
     }
+
     sevkiyat.fsId = docRef.id;
     state.sevkiyatlar.unshift(sevkiyat);
     state.aktifFisler = [];
     titret(80);
     basariDialog(sevkiyat);
+
   } catch(e) {
     console.error('sevkiyatKaydet hata:', e);
-    toast('❌ Kayıt hatası: ' + (e.message || String(e)), 5000);
+    // Hatayı kullanıcıya tam olarak göster
+    const hataMetin = e.message || String(e);
+    const mbg = document.createElement('div');
+    mbg.className = 'modal-bg';
+    mbg.innerHTML = `
+      <div class="modal" onclick="event.stopPropagation()" style="padding:20px">
+        <div class="modal-handle"></div>
+        <div style="color:var(--red);font-size:18px;font-weight:700;margin-bottom:12px">❌ Kayıt Başarısız</div>
+        <div style="background:#f5d6d6;border-radius:8px;padding:12px;font-size:13px;font-family:monospace;word-break:break-all;margin-bottom:16px">${escapeHtml(hataMetin)}</div>
+        <div style="font-size:13px;color:var(--ink-soft);margin-bottom:16px">Bu hatayı geliştiriciye bildirin veya Firestore kurallarını kontrol edin.</div>
+        <button class="btn" onclick="this.closest('.modal-bg').remove()">Kapat</button>
+      </div>`;
+    mbg.onclick = () => mbg.remove();
+    document.body.appendChild(mbg);
   } finally {
     state._kayitYapiliyor = false;
   }
