@@ -290,7 +290,7 @@ const state = {
   aktifFisIdx: null,
   tesseractWorker: null,
   oturumNo: null,
-  yoneticiSekme: 'bugun',
+  yoneticiSekme: 'onay',
   yoneticiSevkiyatlar: [],
   unsubscribeFn: null,
 };
@@ -1027,8 +1027,18 @@ async function ocrYap(imageData, onProgress) {
 
 // ====== YARDIMCILAR ======
 function uretSevkiyatNo() {
-  const t = new Date();
-  return `SVK-${t.getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
+  // Mevcut sevkiyatlardan en yüksek numarayı bul, +1 ile devam et
+  const tumSevk = (state.sevkiyatlar || []).concat(state.yoneticiSevkiyatlar || []);
+  let max = 0;
+  for (const s of tumSevk) {
+    const m = (s.sevkiyatNo || '').match(/^S-(\d+)$/);
+    if (m) { const n = parseInt(m[1], 10); if (n > max) max = n; }
+  }
+  // localStorage'da da sayacı tut (ilk oturumda liste boş olabilir)
+  const kayitliMax = parseInt(localStorage.getItem('ds_sevkiyat_sayac') || '0', 10);
+  const yeni = Math.max(max, kayitliMax) + 1;
+  localStorage.setItem('ds_sevkiyat_sayac', String(yeni));
+  return `S-${String(yeni).padStart(4, '0')}`;
 }
 function tarihFormatla(z) {
   const d = new Date(z);
@@ -1104,7 +1114,13 @@ function render() {
 // ====== EKRAN: MÜŞTERİ LİSTESİ ======
 function ekranMusteriListesi() {
   const isYonetici = state.profil?.rol === 'YONETICI';
-  const liste = state.musteriler.map(m => `
+  // Son sevkiyat tarihine göre sırala — en son kullanılan üstte
+  const sonSevkTarih = {};
+  (state.sevkiyatlar || []).forEach(s => {
+    if (!sonSevkTarih[s.musteriId] || s.tarih > sonSevkTarih[s.musteriId]) sonSevkTarih[s.musteriId] = s.tarih;
+  });
+  const siraliMusteriler = state.musteriler.slice().sort((a,b) => (sonSevkTarih[b.id]||0) - (sonSevkTarih[a.id]||0));
+  const liste = siraliMusteriler.map(m => `
     <div class="customer-item" style="position:relative">
       <div style="display:flex;align-items:center;flex:1;gap:12px;cursor:pointer" onclick="musteriSec(${m.id})">
         <div class="avatar">${m.ad.charAt(0).toUpperCase()}</div>
@@ -1139,9 +1155,9 @@ function ekranMusteriListesi() {
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
         Yeni Müşteri Ekle
       </button>
-      <div class="section-title">Müşteriler (${state.musteriler.length})</div>
+      <div class="section-title">Müşteriler (${siraliMusteriler.length})</div>
       <div id="musteri-liste">
-        ${state.musteriler.length === 0 ? `<div class="empty"><div class="icon">⌖</div><div>Henüz müşteri yok.<br>Yukarıdan ekleyin.</div></div>` : liste}
+        ${siraliMusteriler.length === 0 ? `<div class="empty"><div class="icon">⌖</div><div>Henüz müşteri yok.<br>Yukarıdan ekleyin.</div></div>` : liste}
       </div>
     </div>
   `;
@@ -1150,6 +1166,15 @@ function ekranMusteriListesi() {
 async function ayarlarDialog() {
   const googleKey = await Storage.get('app:googleApiKey') || '';
   const claudeKey = await Storage.get('app:claudeApiKey') || '';
+  const pdfBoyut  = await Storage.get('app:pdfBoyut') || 'A4';
+  // Depolama tahmini: sevkiyat sayısı × ortalama belge boyutu
+  const sevkSayisi = (state.yoneticiSevkiyatlar || state.sevkiyatlar || []).length;
+  const tahminiKB  = sevkSayisi * 3; // ~3 KB/sevkiyat (fotoğrafsız)
+  const fotoSayisi = (state.yoneticiSevkiyatlar || []).reduce((s,x)=>s+(x.fotoSayisi||0),0);
+  const fotoKB     = fotoSayisi * 53; // ~53 KB/fotoğraf (base64 sıkıştırılmış)
+  const toplamKB   = tahminiKB + fotoKB;
+  const limitKB    = 1024 * 1024; // 1 GB Firestore ücretsiz
+  const dolulukPct = Math.min(100, (toplamKB / limitKB * 100)).toFixed(2);
 
   const mbg = document.createElement('div');
   mbg.className = 'modal-bg';
@@ -1188,6 +1213,32 @@ async function ayarlarDialog() {
         <div style="font-weight:700;font-size:13px;margin-bottom:6px">🧠 Öğrenilen Ürünler</div>
         <div id="ogrenilen-liste" style="font-size:12px;color:var(--ink-soft)">Yükleniyor...</div>
         <button onclick="ogrenilenleriSifirla()" style="margin-top:8px;background:none;border:1px solid var(--red);color:var(--red);padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer">Öğrenilenleri Sıfırla</button>
+      </div>
+
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--line)">
+        <div style="font-weight:700;font-size:13px;margin-bottom:8px">🖨 PDF Boyutu (Onay sonrası otomatik indir)</div>
+        <div style="display:flex;gap:8px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:8px 14px;border:2px solid ${pdfBoyut==='A4'?'var(--leather)':'var(--line)'};border-radius:8px;flex:1;background:var(--bg-card)">
+            <input type="radio" name="pdf-boyut" value="A4" ${pdfBoyut==='A4'?'checked':''} onchange="Storage.set('app:pdfBoyut','A4')"> A4
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:8px 14px;border:2px solid ${pdfBoyut==='A5'?'var(--leather)':'var(--line)'};border-radius:8px;flex:1;background:var(--bg-card)">
+            <input type="radio" name="pdf-boyut" value="A5" ${pdfBoyut==='A5'?'checked':''} onchange="Storage.set('app:pdfBoyut','A5')"> A5
+          </label>
+        </div>
+      </div>
+
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--line)">
+        <div style="font-weight:700;font-size:13px;margin-bottom:8px">💾 Firestore Depolama (Tahmini)</div>
+        <div style="background:var(--bg-soft);border-radius:8px;padding:10px 14px;font-size:13px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+            <span>${sevkSayisi} sevkiyat · ${fotoSayisi} fotoğraf</span>
+            <span class="mono">${toplamKB < 1024 ? toplamKB.toFixed(0)+' KB' : (toplamKB/1024).toFixed(1)+' MB'} / 1 GB</span>
+          </div>
+          <div style="background:var(--line);border-radius:999px;height:8px;overflow:hidden">
+            <div style="background:${parseFloat(dolulukPct)>80?'var(--red)':parseFloat(dolulukPct)>50?'var(--amber)':'var(--green)'};height:100%;width:${dolulukPct}%;border-radius:999px;transition:width 0.3s"></div>
+          </div>
+          <div style="font-size:11px;color:var(--ink-faint);margin-top:4px">%${dolulukPct} dolu · Fotoğraf başına ~53 KB hesaplanmıştır</div>
+        </div>
       </div>
 
       <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--line)">
@@ -1426,7 +1477,6 @@ async function yeniMusteriDialog() {
       <div class="modal-handle"></div>
       <h2>Yeni Müşteri</h2>
       <div class="input-group"><label class="input-label">Müşteri Adı *</label><input class="input" id="m-ad" placeholder="Örn: ABC Tekstil"></div>
-      <div class="input-group"><label class="input-label">Müşteri Kodu *</label><input class="input mono" id="m-kod" placeholder="Örn: ABC001"></div>
       <div class="input-group"><label class="input-label">Telefon</label><input class="input" id="m-tel" placeholder="+90..."></div>
       <div class="input-group">
         <label class="input-label">Tercih Edilen Birim</label>
@@ -1451,11 +1501,13 @@ async function yeniMusteriDialog() {
 
 async function yeniMusteriKaydet() {
   const ad = document.getElementById('m-ad').value.trim();
-  const kod = document.getElementById('m-kod').value.trim();
   const telefon = document.getElementById('m-tel').value.trim();
   const tercihBirim = document.querySelector('input[name="m-birim"]:checked')?.value || 'dm2';
-  if (!ad || !kod) { toast('Ad ve kod zorunlu'); return; }
-  const id = Date.now(); // Race condition-free; ms precision yeterli
+  if (!ad) { toast('Müşteri adı zorunlu'); return; }
+  // Kod otomatik üret: adın ilk harfleri + 3 haneli sayı
+  const harfler = ad.toUpperCase().replace(/[^A-ZÇĞİÖŞÜ]/g,'').substring(0,3).padEnd(3,'X');
+  const kod = harfler + String(Math.floor(100 + Math.random() * 900));
+  const id = Date.now();
   const m = { id, ad, kod, telefon, tercihBirim, olusturma: Date.now() };
   // Firestore'a kaydet (tek kaynak)
   try {
@@ -2284,7 +2336,8 @@ async function pdfUret(sId, boyut) {
 
 // ====== SEVKİYAT LİSTESİ + DETAY ======
 function ekranSevkiyatListesi() {
-  const sevk = state.sevkiyatlar.slice().sort((a, b) => b.tarih - a.tarih);
+  // Onaylanmış sevkiyatlar personel geçmişinden kaldırılır
+  const sevk = state.sevkiyatlar.filter(s => s.kontrolDurumu !== 'onaylandi').sort((a, b) => b.tarih - a.tarih);
   const liste = sevk.map(s => `
     <div class="shipment-item" onclick="sevkiyatDetayAc('${s.fsId}')">
       <div class="header"><span class="no">${s.sevkiyatNo}</span><span class="date">${tarihKisa(s.tarih)}</span></div>
@@ -2495,8 +2548,6 @@ async function sevkiyatKontrolEt(fsId) {
       kontrolTarihi: Date.now(),
       kontrolEden: state.profil?.ad || 'Yönetici'
     });
-    // State'i güncelle
-    // Hem listedeki hem aktif detaydaki objeyi güncelle
     const listItem = state.yoneticiSevkiyatlar.find(x => x.fsId === fsId);
     if (listItem) { listItem.kontrolDurumu = 'onaylandi'; listItem.kontrolTarihi = Date.now(); listItem.kontrolEden = state.profil?.ad; }
     if (state.aktifSevkiyatDetay && state.aktifSevkiyatDetay.fsId === fsId) {
@@ -2504,8 +2555,11 @@ async function sevkiyatKontrolEt(fsId) {
       state.aktifSevkiyatDetay.kontrolTarihi = Date.now();
       state.aktifSevkiyatDetay.kontrolEden = state.profil?.ad;
     }
-    toast('✅ Sevkiyat onaylandı');
+    toast('✅ Sevkiyat onaylandı — PDF hazırlanıyor...', 3000);
     render();
+    // Onay sonrası otomatik PDF indir
+    const pdfBoyut = await Storage.get('app:pdfBoyut') || 'A4';
+    setTimeout(() => pdfUret(fsId, pdfBoyut), 500);
   } catch(e) { toast('Hata: ' + e.message, 3000); }
 }
 
@@ -2547,14 +2601,18 @@ function fotoPopup(fsId, sira) {
   });
 }
 
-// ====== ESKİ FOTOĞRAFLARI TEMİZLE (10 gün) ======
+// ====== FOTOĞRAF KOTA YÖNETİMİ (zaman limiti yok, kota dolunca eskiyi sil) ======
 async function eskiFotograflariTemizle() {
-  const sinir = Date.now() - (10 * 24 * 60 * 60 * 1000);
+  // 10 günlük limit kaldırıldı — kapasite dolunca en eski fotoğraflar silinir
+  // Bu fonksiyon çağrıldığında sadece fotoğrafı olan en eski 20 kaydı temizler
+  // Firestore'un kota uyarısını engellemek için manuel tetiklenebilir
   try {
     const snap = await db.collection('sevkiyatlar')
-      .where('tarih', '<', sinir).limit(50).get();
+      .where('fotoSayisi', '>', 0)
+      .orderBy('fotoSayisi').orderBy('tarih', 'asc')
+      .limit(20).get();
+    if (snap.empty) return;
     for (const doc of snap.docs) {
-      if ((doc.data().fotoSayisi || 0) <= 0) continue;
       const fotoSnap = await doc.ref.collection('fotograflar').get();
       if (fotoSnap.empty) continue;
       const batch = db.batch();
@@ -2638,8 +2696,8 @@ async function cikisYap() {
 // ====== YÖNETİCİ PANELİ ======
 function ekranYonetici() {
   const sekmeler = [
-    { id:'bugun', label:'Bugün' },
-    { id:'hafta',  label:'Bu Hafta' },
+    { id:'onay', label:'⏳ Onay Bekleyenler' },
+    { id:'arama', label:'🔍 Ara' },
     { id:'musteri', label:'Müşteri' },
     { id:'personel', label:'Personel' },
     { id:'kullanicilar', label:'Kullanıcılar' },
@@ -2651,83 +2709,88 @@ function ekranYonetici() {
   let icerik = '';
   const sevk = state.yoneticiSevkiyatlar || [];
 
-  if (state.yoneticiSekme === 'bugun') {
-    const bugun = new Date(); bugun.setHours(0,0,0,0);
-    const bugunSevk = sevk.filter(s => s.tarih >= bugun.getTime());
-    const topDm2 = bugunSevk.reduce((a,s)=>a+(s.toplamYuzeyDm2||0),0);
-    const topFt2  = bugunSevk.reduce((a,s)=>a+(s.toplamYuzeyFt2||0),0);
-    const topAdet = bugunSevk.reduce((a,s)=>a+(s.toplamAdet||0),0);
+  if (state.yoneticiSekme === 'onay') {
+    const bekleyenler = sevk.filter(s => s.kontrolDurumu !== 'onaylandi');
+    icerik = `
+      ${bekleyenler.length === 0
+        ? '<div class="empty"><div class="icon">✅</div><div>Tüm sevkiyatlar onaylandı</div></div>'
+        : bekleyenler.slice().sort((a,b)=>b.tarih-a.tarih).map(s => sevkiyatKartiOnay(s)).join('')}`;
+
+  } else if (state.yoneticiSekme === 'arama') {
+    const aramaVal = state._yoneticiArama || '';
+    const sonuclar = aramaVal.length >= 2 ? sevk.filter(s => {
+      const q = aramaVal.toLowerCase();
+      return (s.sevkiyatNo || '').toLowerCase().includes(q)
+        || tarihKisa(s.tarih).includes(q)
+        || (s.musteriAd || '').toLowerCase().includes(q);
+    }).slice().sort((a,b)=>b.tarih-a.tarih) : [];
 
     icerik = `
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px">
-        ${kartOzet('Sevkiyat', bugunSevk.length, '📦')}
-        ${kartOzet('Deri', topAdet, '🐂')}
-        ${kartOzet('dm²', topDm2.toFixed(0), '📐')}
+      <div style="margin-bottom:14px">
+        <input class="input" id="yonetici-arama" placeholder="Sevkiyat no (S-0001) veya tarih (31.12.2025)..."
+          value="${escapeHtml(aramaVal)}"
+          oninput="state._yoneticiArama=this.value;render()"
+          style="font-size:15px">
       </div>
-      <div style="font-size:12px;color:var(--ink-faint);text-align:center;margin-bottom:12px">${topFt2.toFixed(2)} ft²</div>
-      <div class="section-title">Bugünkü Sevkiyatlar</div>
-      ${bugunSevk.length === 0 ? '<div class="empty"><div class="icon">📭</div><div>Bugün henüz sevkiyat yok</div></div>' :
-        bugunSevk.slice().reverse().map(s => sevkiyatKarti(s)).join('')}
-      ${bugunSevk.length > 0 ? `<button class="btn secondary" style="margin-top:12px;width:100%" onclick="raporGonder('bugun')">📧 Günlük Rapor Gönder</button>` : ''}`;
-
-  } else if (state.yoneticiSekme === 'hafta') {
-    const haftaBasi = new Date(); haftaBasi.setDate(haftaBasi.getDate()-6); haftaBasi.setHours(0,0,0,0);
-    const haftaSevk = sevk.filter(s => s.tarih >= haftaBasi.getTime());
-    const topDm2  = haftaSevk.reduce((a,s)=>a+(s.toplamYuzeyDm2||0),0);
-    const topAdet = haftaSevk.reduce((a,s)=>a+(s.toplamAdet||0),0);
-
-    icerik = `
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px">
-        ${kartOzet('Sevkiyat', haftaSevk.length, '📦')}
-        ${kartOzet('Deri', topAdet, '🐂')}
-        ${kartOzet('dm²', topDm2.toFixed(0), '📐')}
-      </div>
-      <div class="section-title">Son 7 Gün</div>
-      ${haftaSevk.slice().reverse().map(s => sevkiyatKarti(s)).join('')}
-      ${haftaSevk.length > 0 ? `<button class="btn secondary" style="margin-top:12px;width:100%" onclick="raporGonder('hafta')">📧 Haftalık Rapor Gönder</button>` : ''}`;
+      ${aramaVal.length < 2
+        ? '<div style="text-align:center;color:var(--ink-faint);padding:20px;font-size:13px">En az 2 karakter girin</div>'
+        : sonuclar.length === 0
+          ? '<div class="empty"><div class="icon">🔍</div><div>Sonuç bulunamadı</div></div>'
+          : `<div style="font-size:12px;color:var(--ink-faint);margin-bottom:8px">${sonuclar.length} sonuç</div>` + sonuclar.map(s => sevkiyatKarti(s)).join('')}`;
 
   } else if (state.yoneticiSekme === 'musteri') {
-    const mMap = {};
+    // Her müşteri için sevkiyatları ayrı ayrı göster, tıklayınca detay
+    const musteriGruplari = {};
     sevk.forEach(s => {
-      if (!mMap[s.musteriAd]) mMap[s.musteriAd] = { ad: s.musteriAd, kod: s.musteriKod, adet:0, dm2:0, sayim:0 };
-      mMap[s.musteriAd].adet  += s.toplamAdet||0;
-      mMap[s.musteriAd].dm2   += s.toplamYuzeyDm2||0;
-      mMap[s.musteriAd].sayim += 1;
+      if (!musteriGruplari[s.musteriAd]) musteriGruplari[s.musteriAd] = { ad: s.musteriAd, kod: s.musteriKod, sevkiyatlar: [] };
+      musteriGruplari[s.musteriAd].sevkiyatlar.push(s);
     });
-    const sirali = Object.values(mMap).sort((a,b)=>b.dm2-a.dm2);
+    const sirali = Object.values(musteriGruplari).sort((a,b) => a.ad.localeCompare(b.ad));
     icerik = `
-      <div class="section-title">Müşteri Bazlı Toplam</div>
-      ${sirali.map(m=>`
-        <div class="card">
-          <div style="font-family:'Fraunces';font-weight:600;font-size:16px">${m.ad}</div>
-          <div class="mono text-muted" style="font-size:12px">${m.kod}</div>
-          <div style="display:flex;gap:16px;margin-top:8px;font-size:13px">
-            <span><b>${m.sayim}</b> sevkiyat</span>
-            <span><b>${m.adet}</b> deri</span>
-            <span><b>${m.dm2.toFixed(0)}</b> dm²</span>
+      <div class="section-title">Müşteri Bazlı Sevkiyatlar</div>
+      ${sirali.map(m => {
+        const sevkSirali = m.sevkiyatlar.slice().sort((a,b)=>b.tarih-a.tarih);
+        const topDm2 = m.sevkiyatlar.reduce((s,x)=>s+(x.toplamYuzeyDm2||0),0);
+        return `
+        <details style="margin-bottom:10px;background:var(--bg-card);border:1px solid var(--line);border-radius:10px;overflow:hidden">
+          <summary style="padding:14px;cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px">
+            <div style="flex:1">
+              <div style="font-family:'Fraunces';font-weight:600;font-size:15px">${escapeHtml(m.ad)}</div>
+              <div style="font-size:12px;color:var(--ink-faint)">${m.kod} · ${m.sevkiyatlar.length} sevkiyat · ${topDm2.toFixed(0)} dm²</div>
+            </div>
+            <span style="color:var(--ink-faint);font-size:18px">›</span>
+          </summary>
+          <div style="border-top:1px solid var(--line);padding:10px">
+            ${sevkSirali.map(s => sevkiyatKarti(s)).join('')}
           </div>
-        </div>`).join('')}`;
+        </details>`;
+      }).join('')}`;
 
   } else if (state.yoneticiSekme === 'personel') {
     const pMap = {};
     sevk.forEach(s => {
       const key = s.personelAd || 'Bilinmiyor';
-      if (!pMap[key]) pMap[key] = { ad: key, adet:0, dm2:0, sayim:0 };
+      if (!pMap[key]) pMap[key] = { ad: key, adet:0, dm2:0, sayim:0, sevkiyatlar:[] };
       pMap[key].adet  += s.toplamAdet||0;
       pMap[key].dm2   += s.toplamYuzeyDm2||0;
       pMap[key].sayim += 1;
+      pMap[key].sevkiyatlar.push(s);
     });
     icerik = `
-      <div class="section-title">Personel Bazlı Toplam</div>
-      ${Object.values(pMap).sort((a,b)=>b.dm2-a.dm2).map(p=>`
-        <div class="card">
-          <div style="font-family:'Fraunces';font-weight:600;font-size:16px">👤 ${p.ad}</div>
-          <div style="display:flex;gap:16px;margin-top:8px;font-size:13px">
-            <span><b>${p.sayim}</b> sevkiyat</span>
-            <span><b>${p.adet}</b> deri</span>
-            <span><b>${p.dm2.toFixed(0)}</b> dm²</span>
+      <div class="section-title">Personel Bazlı Sevkiyatlar</div>
+      ${Object.values(pMap).sort((a,b)=>b.sayim-a.sayim).map(p=>`
+        <details style="margin-bottom:10px;background:var(--bg-card);border:1px solid var(--line);border-radius:10px;overflow:hidden">
+          <summary style="padding:14px;cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px">
+            <div style="flex:1">
+              <div style="font-family:'Fraunces';font-weight:600;font-size:15px">👤 ${escapeHtml(p.ad)}</div>
+              <div style="font-size:12px;color:var(--ink-faint)">${p.sayim} sevkiyat · ${p.adet} deri · ${p.dm2.toFixed(0)} dm²</div>
+            </div>
+            <span style="color:var(--ink-faint);font-size:18px">›</span>
+          </summary>
+          <div style="border-top:1px solid var(--line);padding:10px">
+            ${p.sevkiyatlar.slice().sort((a,b)=>b.tarih-a.tarih).map(s=>sevkiyatKarti(s)).join('')}
           </div>
-        </div>`).join('')}`;
+        </details>`).join('')}`;
 
   } else if (state.yoneticiSekme === 'kullanicilar') {
     icerik = `
@@ -2791,6 +2854,24 @@ function sevkiyatKarti(s) {
   </div>`;
 }
 
+function sevkiyatKartiOnay(s) {
+  return `<div class="shipment-item" onclick="yoneticiSevkiyatDetay('${s.fsId}')"
+    style="border-left:4px solid var(--amber);background:linear-gradient(135deg,var(--bg-card),var(--amber-soft))">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <span style="background:var(--amber);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;text-transform:uppercase">⏳ Onay Bekliyor</span>
+      <span style="font-size:12px;color:var(--ink-faint);margin-left:auto">${tarihFormatla(s.tarih)}</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <div style="flex:1">
+        <div style="font-weight:700;font-size:15px">${s.musteriAd}</div>
+        <div style="font-size:12px;color:var(--ink-soft)">${s.sevkiyatNo} · 👤 ${s.personelAd||'?'}</div>
+        <div style="font-size:13px;margin-top:4px">🐂 ${s.toplamAdet} deri · 📐 ${(s.toplamYuzeyDm2||0).toFixed(0)} dm²</div>
+      </div>
+      <button class="btn green btn-small" onclick="event.stopPropagation();sevkiyatKontrolEt('${s.fsId}')">✓ Onayla</button>
+    </div>
+  </div>`;
+}
+
 function yoneticiSekme(sekme) {
   state.yoneticiSekme = sekme;
   render();
@@ -2820,7 +2901,10 @@ async function personelEkle() {
     const ikincilAuth = ikincilApp.auth();
     const cred = await ikincilAuth.createUserWithEmailAndPassword(mail, sifre);
     const uid  = cred.user.uid;
-    await db.collection('users').doc(uid).set({ ad, email: mail, rol: 'PERSONEL', aktif: true, olusturma: Date.now() });
+    // Yeni kullanıcı hâlâ ikincil oturumda iken kendi belgesini yazar
+    // (Firestore kuralı "kendi belgesini yaz" ise bu geçer)
+    const ikincilDb = ikincilApp.firestore();
+    await ikincilDb.collection('users').doc(uid).set({ ad, email: mail, rol: 'PERSONEL', aktif: true, olusturma: Date.now() });
     await ikincilAuth.signOut();
     await ikincilApp.delete();
     ['pers-ad','pers-mail','pers-sifre'].forEach(id => document.getElementById(id).value = '');
