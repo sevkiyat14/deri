@@ -2067,70 +2067,75 @@ function ekranInceleme() {
 
 async function sevkiyatKaydet() {
   const onayli = state.aktifFisler.filter(f => f.durum === 'hazir' || f.durum === 'onaylandi');
-  if (onayli.length === 0) return;
+  if (onayli.length === 0) { toast('Kayıt edilecek onaylı fiş yok', 2000); return; }
 
   // ⛔ Çift tıklama engeli
   if (state._kayitYapiliyor) return;
   state._kayitYapiliyor = true;
+  toast('⏳ Kaydediliyor...', 2000);
   try {
-  // ⛔ KAYIT ENGELİ: Toplam veya adet tutmayan fişleri engelle
-  const sorunlu = onayli.filter(f => {
-    const v = f.veri;
-    const olcumToplam = (v.yuzeyDegerleri || []).reduce((s, y) => s + y.deger, 0);
-    const beklenen = v.birim === 'dm2' ? (v.toplamYuzeyDm2?.deger || 0) : (v.toplamYuzeyFt2?.deger || 0);
-    // Yalnızca tek tek ölçüm GİRİLMİŞSE toplam tutarlılığını kontrol et
-    if (v.yuzeyDegerleri.length > 0 && beklenen > 0 && Math.round(olcumToplam * 10) !== Math.round(beklenen * 10)) return true;
-    if (v.deriAdedi.deger > 0 && v.yuzeyDegerleri.length > 0 && v.yuzeyDegerleri.length !== v.deriAdedi.deger) return true;
-    return false;
-  });
-  if (sorunlu.length > 0) {
-    toast(`❌ ${sorunlu.length} fişte ölçüm tutarsızlığı var — önce düzeltin`, 4000);
-    return;
-  }
+    // ⛔ KAYIT ENGELİ: Toplam veya adet tutmayan fişleri engelle
+    const sorunlu = onayli.filter(f => {
+      try {
+        const v = f.veri;
+        const yd = v.yuzeyDegerleri || [];
+        const olcumToplam = yd.reduce((s, y) => s + (y.deger || 0), 0);
+        const beklenen = v.birim === 'dm2' ? (v.toplamYuzeyDm2?.deger || 0) : (v.toplamYuzeyFt2?.deger || 0);
+        if (yd.length > 0 && beklenen > 0 && Math.round(olcumToplam * 10) !== Math.round(beklenen * 10)) return true;
+        if ((v.deriAdedi?.deger || 0) > 0 && yd.length > 0 && yd.length !== v.deriAdedi.deger) return true;
+        return false;
+      } catch(e) { return false; }
+    });
+    if (sorunlu.length > 0) {
+      toast(`❌ ${sorunlu.length} fişte ölçüm tutarsızlığı var — önce düzeltin`, 4000);
+      return;
+    }
 
-  const m = state.aktifMusteri;
-  const musteriiBirim = m.tercihBirim || 'dm2';
-  const toplamAdet = onayli.reduce((s, f) => s + (f.veri.deriAdedi.deger || 0), 0);
-  const toplamDm2  = onayli.reduce((s, f) => s + (f.veri.toplamYuzeyDm2?.deger || 0), 0);
-  const toplamFt2  = onayli.reduce((s, f) => s + (f.veri.toplamYuzeyFt2?.deger || 0), 0);
+    const m = state.aktifMusteri;
+    if (!m) { toast('❌ Aktif müşteri bulunamadı', 3000); return; }
+    const musteriiBirim = m.tercihBirim || 'dm2';
+    const toplamAdet = onayli.reduce((s, f) => s + (f.veri.deriAdedi?.deger || 0), 0);
+    const toplamDm2  = onayli.reduce((s, f) => s + (f.veri.toplamYuzeyDm2?.deger || 0), 0);
+    const toplamFt2  = onayli.reduce((s, f) => s + (f.veri.toplamYuzeyFt2?.deger || 0), 0);
 
-  const sevkiyat = {
-    sevkiyatNo: state.oturumNo,
-    musteriId: m.id, musteriAd: m.ad, musteriKod: m.kod,
-    musteriiBirim,
-    tarih: Date.now(), durum: 'TAMAMLANDI',
-    toplamAdet, toplamYuzeyDm2: toplamDm2, toplamYuzeyFt2: toplamFt2,
-    toplamYuzey: toplamDm2,
-    personelId: state.kullanici?.uid || 'bilinmiyor',
-    personelAd: state.profil?.ad || state.kullanici?.email || 'Bilinmiyor',
-    kontrolDurumu: 'beklemede',  // beklemede | onaylandi
-    deriler: await Promise.all(onayli.map(async f => {
+    // Fotoğrafları sıkıştır
+    const deriler = await Promise.all(onayli.map(async f => {
       let foto = null;
       if (f.foto) {
         try { foto = await fotoSikistir(f.foto, 600, 0.45); } catch(e) {}
       }
+      const v = f.veri;
       return {
-        cins: f.veri.cins.deger, renk: f.veri.renk.deger, kod: f.veri.kod.deger,
-        kalite: f.veri.kalite.deger, seriNo: f.veri.seriNo.deger, barkod: f.veri.barkod.deger,
-        deriAdedi: f.veri.deriAdedi.deger,
-        toplamYuzeyFt2: f.veri.toplamYuzeyFt2.deger, toplamYuzeyDm2: f.veri.toplamYuzeyDm2.deger,
-        birim: f.veri.birim, yuzeyOlcumleri: f.veri.yuzeyDegerleri,
-        okumaGuveni: f.veri.genelGuven, kaynak: f.kaynak,
-        foto  // Sıkıştırılmış fotoğraf (~50KB)
+        cins: v.cins?.deger || '', renk: v.renk?.deger || '', kod: v.kod?.deger || '',
+        kalite: v.kalite?.deger || '', seriNo: v.seriNo?.deger || '', barkod: v.barkod?.deger || '',
+        deriAdedi: v.deriAdedi?.deger || 0,
+        toplamYuzeyFt2: v.toplamYuzeyFt2?.deger || 0, toplamYuzeyDm2: v.toplamYuzeyDm2?.deger || 0,
+        birim: v.birim || 'dm2', yuzeyOlcumleri: v.yuzeyDegerleri || [],
+        okumaGuveni: v.genelGuven || 0, kaynak: f.kaynak || 'bilinmiyor',
+        foto
       };
-    }))
-  };
+    }));
 
-  try {
-    // Fotoğraflar büyükse ayrı subcollection'a kaydet
+    const sevkiyat = {
+      sevkiyatNo: state.oturumNo,
+      musteriId: m.id, musteriAd: m.ad, musteriKod: m.kod,
+      musteriiBirim,
+      tarih: Date.now(), durum: 'TAMAMLANDI',
+      toplamAdet, toplamYuzeyDm2: toplamDm2, toplamYuzeyFt2: toplamFt2,
+      toplamYuzey: toplamDm2,
+      personelId: state.kullanici?.uid || 'bilinmiyor',
+      personelAd: state.profil?.ad || state.kullanici?.email || 'Bilinmiyor',
+      kontrolDurumu: 'beklemede',
+      deriler
+    };
+
+    // Fotoğrafları ana doc'tan ayır (Firestore 1MB limiti)
     const fotograflar = sevkiyat.deriler.filter(d => d.foto).map(d => d.foto);
-    const derilerTemiz = sevkiyat.deriler.map(d => { const { foto, ...rest } = d; return rest; });
-    sevkiyat.deriler = derilerTemiz;
+    sevkiyat.deriler = sevkiyat.deriler.map(d => { const { foto, ...rest } = d; return rest; });
     sevkiyat.fotoSayisi = fotograflar.length;
 
     const docRef = await db.collection('sevkiyatlar').add(sevkiyat);
 
-    // Fotoğrafları ayrı kaydet (document boyut limiti aşılmasın)
     for (let i = 0; i < fotograflar.length; i++) {
       await db.collection('sevkiyatlar').doc(docRef.id)
         .collection('fotograflar').doc(String(i)).set({
@@ -2138,13 +2143,13 @@ async function sevkiyatKaydet() {
         });
     }
     sevkiyat.fsId = docRef.id;
-    state.sevkiyatlar.unshift(sevkiyat);  // Listeye ekle
+    state.sevkiyatlar.unshift(sevkiyat);
     state.aktifFisler = [];
     titret(80);
     basariDialog(sevkiyat);
   } catch(e) {
-    toast('❌ Kayıt hatası: ' + e.message, 4000);
-  }
+    console.error('sevkiyatKaydet hata:', e);
+    toast('❌ Kayıt hatası: ' + (e.message || String(e)), 5000);
   } finally {
     state._kayitYapiliyor = false;
   }
