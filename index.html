@@ -1945,23 +1945,29 @@ function fisSil(idx) {
 function derilerGrupla(deriler) {
   const gruplar = {};
   deriler.forEach(d => {
-    const kal = (d.kalite || d.veri?.kalite?.deger || '').toUpperCase();
+    const kalRaw = typeof d.kalite === 'string' ? d.kalite : (d.kalite?.deger || d.veri?.kalite?.deger || '');
+    const kal = String(kalRaw).toUpperCase();
     const isEco = kal.startsWith('ECO');
-    const kod = d.kod || d.veri?.kod?.deger || '?';
+    const kodRaw = typeof d.kod === 'string' ? d.kod : (d.kod?.deger || d.veri?.kod?.deger || '?');
+    const kod = String(kodRaw);
     const key = `${kod}_${isEco ? 'ECO' : 'STD'}`;
     if (!gruplar[key]) {
+      const cinsRaw = typeof d.cins === 'string' ? d.cins : (d.cins?.deger || d.veri?.cins?.deger || '?');
+      const renkRaw = typeof d.renk === 'string' ? d.renk : (d.renk?.deger || d.veri?.renk?.deger || '?');
       gruplar[key] = {
-        kod, cins: d.cins || d.veri?.cins?.deger || '?',
-        renk: d.renk || d.veri?.renk?.deger || '?',
+        kod, cins: String(cinsRaw), renk: String(renkRaw),
         ecoGrup: isEco, kaliteler: new Set(),
         toplamAdet: 0, toplamDm2: 0, toplamFt2: 0,
         fisler: []
       };
     }
     gruplar[key].kaliteler.add(kal);
-    gruplar[key].toplamAdet += d.deriAdedi || d.veri?.deriAdedi?.deger || 0;
-    gruplar[key].toplamDm2  += d.toplamYuzeyDm2 || d.veri?.toplamYuzeyDm2?.deger || 0;
-    gruplar[key].toplamFt2  += d.toplamYuzeyFt2 || d.veri?.toplamYuzeyFt2?.deger || 0;
+    const adet = typeof d.deriAdedi === 'number' ? d.deriAdedi : (d.deriAdedi?.deger || d.veri?.deriAdedi?.deger || 0);
+    const dm2 = typeof d.toplamYuzeyDm2 === 'number' ? d.toplamYuzeyDm2 : (d.toplamYuzeyDm2?.deger || d.veri?.toplamYuzeyDm2?.deger || 0);
+    const ft2 = typeof d.toplamYuzeyFt2 === 'number' ? d.toplamYuzeyFt2 : (d.toplamYuzeyFt2?.deger || d.veri?.toplamYuzeyFt2?.deger || 0);
+    gruplar[key].toplamAdet += adet;
+    gruplar[key].toplamDm2  += dm2;
+    gruplar[key].toplamFt2  += ft2;
     gruplar[key].fisler.push(d);
   });
   return Object.values(gruplar).sort((a,b) => {
