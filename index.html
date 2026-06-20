@@ -313,14 +313,16 @@ const state = {
   unsubscribeFn: null,
 };
 
-// Ekran değiştirme — geçmişe ekle
+// Ekran değiştirme — geçmişe ekle + browser history
 function ekranGit(yeniEkran) {
   if (state.ekran && state.ekran !== yeniEkran) {
     state.ekranGecmisi.push(state.ekran);
     if (state.ekranGecmisi.length > 20) state.ekranGecmisi.shift();
   }
   state.ekran = yeniEkran;
+  history.pushState({ ekran: yeniEkran }, '', '');
   render();
+  durumKaydet();
 }
 function geriDon() {
   if (state.ekranGecmisi.length > 0) {
@@ -329,7 +331,51 @@ function geriDon() {
     state.ekran = state.profil?.rol === 'YONETICI' ? 'yonetici' : 'musteri-listesi';
   }
   render();
+  durumKaydet();
 }
+window.addEventListener('popstate', (e) => {
+  // Modal açıksa önce onu kapat
+  const modal = document.querySelector('.modal-bg');
+  if (modal) { modal.remove(); history.pushState({}, '', ''); return; }
+  geriDon();
+});
+
+// Kaydedilmemiş durumu sessionStorage'a yaz
+function durumKaydet() {
+  try {
+    const kayit = {
+      ekran: state.ekran,
+      ekranGecmisi: state.ekranGecmisi,
+      aktifMusteri: state.aktifMusteri,
+      aktifFisler: state.aktifFisler?.map(f => ({
+        durum: f.durum, veri: f.veri, kaynak: f.kaynak,
+        foto: null // fotoğraflar çok büyük, kaydetme
+      })) || [],
+      oturumNo: state.oturumNo,
+      yoneticiSekme: state.yoneticiSekme,
+      _sevkiyatNot: state._sevkiyatNot || '',
+      aktifSevkiyatDetayId: state.aktifSevkiyatDetay?.fsId || null,
+    };
+    sessionStorage.setItem('ds_durum', JSON.stringify(kayit));
+  } catch(e) {}
+}
+
+function durumYukle() {
+  try {
+    const raw = sessionStorage.getItem('ds_durum');
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch(e) { return null; }
+}
+
+history.replaceState({ ekran: 'giris' }, '', '');
+window.addEventListener('beforeunload', (e) => {
+  durumKaydet();
+  if (state.aktifFisler?.length > 0) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 function kullaniciAdiGoster(email) {
   if (!email) return '?';
   return email.replace(/@deri\.app$/i, '').replace(/@.*$/, '');
@@ -1127,6 +1173,7 @@ function render() {
     case 'sevkiyat-detay':   app.innerHTML = ekranSevkiyatDetay(); break;
   }
   islemKuyruguIsle();
+  durumKaydet();
 }
 
 // ====== EKRAN: MÜŞTERİ LİSTESİ ======
@@ -2140,8 +2187,27 @@ function ekranInceleme() {
     </div>
     <div class="bottom-bar">
       <button class="btn secondary" onclick="ekranGit('toplu-cekim');">Daha Çek</button>
+      <button class="btn secondary" onclick="notEkleDialog()" style="padding:14px 12px">📝 Not</button>
       <button class="btn gold" onclick="sevkiyatKaydet()" ${onayli.length === 0 ? 'disabled' : ''}>Sevkiyatı Kaydet</button>
     </div>`;
+}
+
+function notEkleDialog() {
+  const mevcut = state._sevkiyatNot || '';
+  const mbg = document.createElement('div');
+  mbg.className = 'modal-bg';
+  mbg.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-handle"></div>
+      <h2>📝 Sevkiyat Notu</h2>
+      <textarea id="sevk-not" class="input" rows="4" style="resize:vertical;font-size:14px" placeholder="Sevkiyata eklemek istediğiniz notu yazın...">${escapeHtml(mevcut)}</textarea>
+      <div class="flex gap-2 mt-3">
+        <button class="btn secondary" onclick="document.querySelector('.modal-bg').remove()">İptal</button>
+        <button class="btn" style="background:var(--leather-dark)" onclick="state._sevkiyatNot=document.getElementById('sevk-not').value.trim();document.querySelector('.modal-bg').remove();toast(state._sevkiyatNot?'✓ Not eklendi':'Not kaldırıldı')">Kaydet</button>
+      </div>
+    </div>`;
+  mbg.onclick = () => mbg.remove();
+  document.body.appendChild(mbg);
 }
 
 async function sevkiyatKaydet() {
@@ -2192,6 +2258,7 @@ async function sevkiyatKaydet() {
       personelId: uid,
       personelAd: state.profil?.ad || state.kullanici?.email || 'Bilinmiyor',
       kontrolDurumu: 'beklemede',
+      not: state._sevkiyatNot || '',
       deriler
     };
 
@@ -2213,6 +2280,7 @@ async function sevkiyatKaydet() {
     sevkiyat.fsId = docRef.id;
     state.sevkiyatlar.unshift(sevkiyat);
     state.aktifFisler = [];
+    state._sevkiyatNot = '';
     titret(80);
     basariDialog(sevkiyat);
 
@@ -2271,13 +2339,20 @@ function anaEkranaDon() {
 }
 
 // ====== PDF ======
-async function pdfUret(sId, boyut) {
-  const s = state.sevkiyatlar.find(x => x.fsId === sId || x.id === sId)
-         || state.yoneticiSevkiyatlar.find(x => x.fsId === sId)
-         || state.aktifSevkiyatDetay;
-  if (!s) { toast('Sevkiyat bulunamadı'); return; }
+function sevkiyatBul(sId) {
+  return state.sevkiyatlar.find(x => x.fsId === sId || x.id === sId)
+    || state.yoneticiSevkiyatlar?.find(x => x.fsId === sId)
+    || state.aktifSevkiyatDetay;
+}
+
+function pdfOlustur(s, boyut) {
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF({ unit: 'mm', format: boyut.toLowerCase() });
+  pdfIcerikDoldur(pdf, s, boyut);
+  return pdf;
+}
+
+function pdfIcerikDoldur(pdf, s, boyut) {
   const W = pdf.internal.pageSize.getWidth();
   const margin = 12;
   let y = margin;
@@ -2298,7 +2373,13 @@ async function pdfUret(sId, boyut) {
   pdf.setFont('helvetica', 'normal'); pdf.text(s.musteriAd, margin + 22, y);
   pdf.setFont('helvetica', 'bold'); pdf.text('Kod:', W - margin - 40, y);
   pdf.setFont('helvetica', 'normal'); pdf.text(s.musteriKod, W - margin - 28, y);
-  y += 8;
+  y += 5;
+  if (s.not) {
+    pdf.setFont('helvetica', 'italic');
+    pdf.text('Not: ' + s.not.substring(0, 80), margin, y);
+    y += 5;
+  }
+  y += 3;
   const colW = boyut === 'A4' ? [28, 22, 22, 16, 14, 22, 22, 30] : [22, 17, 17, 12, 11, 17, 17, 22];
   const basliklar = ['Cins', 'Renk', 'Kod', 'Kalite', 'Adet', 'dm2', 'ft2', 'Seri No'];
   pdf.setFillColor(220, 220, 220);
@@ -2341,6 +2422,12 @@ async function pdfUret(sId, boyut) {
   y += 14;
   pdf.line(margin, y, margin + 50, y);
   pdf.line(W - margin - 50, y, W - margin, y);
+}
+
+async function pdfUret(sId, boyut) {
+  const s = sevkiyatBul(sId);
+  if (!s) { toast('Sevkiyat bulunamadı'); return; }
+  const pdf = pdfOlustur(s, boyut);
 
   const pdfBlob = pdf.output('blob');
   const pdfFile = new File([pdfBlob], `Irsaliye_${s.sevkiyatNo}.pdf`, { type: 'application/pdf' });
@@ -2432,6 +2519,8 @@ function ekranSevkiyatDetay() {
           <span style="color:var(--amber)">ECO: <b>${ecoDm2.toFixed(0)}</b> dm²</span>
         </div>` : ''}
       </div>
+
+      ${s.not ? `<div style="background:var(--gold-soft,#fef6e4);border-left:3px solid var(--amber);padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px"><b>📝 Not:</b> ${escapeHtml(s.not)}</div>` : ''}
 
       <!-- Kontrol durumu -->
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:12px;border-radius:10px;background:${s.kontrolDurumu === 'onaylandi' ? 'var(--green-soft,#d5f5e3)' : 'var(--bg-soft)'}">
@@ -2605,10 +2694,38 @@ async function sevkiyatKontrolEt(fsId) {
     }
     render();
     toast('✅ Sevkiyat onaylandı', 2000);
-    // Onay sonrası PDF indir/paylaş
+    // Onay sonrası PDF kaydetme
     const pdfBoyut = await Storage.get('app:pdfBoyut') || 'A4';
-    setTimeout(() => pdfUret(fsId, pdfBoyut), 400);
+    setTimeout(() => pdfKaydetDialog(fsId, pdfBoyut), 400);
   } catch(e) { toast('Hata: ' + e.message, 3000); }
+}
+
+async function pdfKaydetDialog(fsId, boyut) {
+  const s = sevkiyatBul(fsId);
+  if (!s) { pdfUret(fsId, boyut); return; }
+  const dosyaAdi = `Irsaliye_${s.sevkiyatNo}_${s.musteriAd.replace(/[^a-zA-Z0-9ğüşıöçĞÜŞİÖÇ]/g,'_')}.pdf`;
+
+  if (window.showSaveFilePicker) {
+    try {
+      const pdf = pdfOlustur(s, boyut);
+      const blob = pdf.output('blob');
+      const handle = await window.showSaveFilePicker({
+        suggestedName: dosyaAdi,
+        types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      toast('✓ İrsaliye kaydedildi', 2000);
+      return;
+    } catch(e) {
+      if (e.name === 'AbortError') return;
+    }
+  }
+  // Fallback: normal indirme
+  const pdf = pdfOlustur(s, boyut);
+  pdf.save(dosyaAdi);
+  toast('PDF indirildi');
 }
 
 // EXIF yönünü okur (1-8 arası değer)
@@ -3002,8 +3119,8 @@ function ekranYonetici() {
     <div class="topbar">
       <div class="brand" style="font-size:15px">👑 ${state.profil?.ad || kullaniciAdiGoster(state.kullanici?.email)}</div>
       <div style="display:flex;gap:6px">
+        <button onclick="ekranGit('musteri-listesi')" style="font-size:12px;padding:6px 10px;background:var(--gold);color:var(--leather-dark);border-radius:8px;font-weight:700">+ Sevkiyat</button>
         <button onclick="ayarlarDialog()">⚙</button>
-        <button onclick="yoneticiSifirla()" style="font-size:11px">🗑</button>
         <button onclick="cikisYap()">Çıkış</button>
       </div>
     </div>
@@ -3031,6 +3148,7 @@ function sevkiyatKarti(s) {
       <span>🐂 ${s.toplamAdet} deri</span>
       <span>📐 ${(s.toplamYuzeyDm2||0).toFixed(0)} dm²</span>
     </div>
+    ${s.not ? `<div style="margin-top:6px;padding:6px 10px;background:var(--gold-soft,#fef6e4);border-radius:6px;font-size:12px;color:var(--ink-soft)">📝 ${escapeHtml(s.not)}</div>` : ''}
   </div>`;
 }
 
@@ -3045,6 +3163,7 @@ function sevkiyatKartiOnay(s) {
       <div style="font-weight:700;font-size:15px">${s.musteriAd}</div>
       <div style="font-size:12px;color:var(--ink-soft)">${s.sevkiyatNo} · 👤 ${s.personelAd||'?'}</div>
       <div style="font-size:13px;margin-top:4px">🐂 ${s.toplamAdet} deri · 📐 ${(s.toplamYuzeyDm2||0).toFixed(0)} dm²</div>
+      ${s.not ? `<div style="margin-top:6px;padding:5px 8px;background:rgba(255,255,255,0.3);border-radius:5px;font-size:12px">📝 ${escapeHtml(s.not)}</div>` : ''}
     </div>
   </div>`;
 }
@@ -3267,13 +3386,15 @@ async function basla() {
     await musterileriYukle();
     await apiAnahtarlariniYukle();
 
+    // Kaydedilmiş durumu yükle
+    const kayitli = durumYukle();
+
     if (profil.rol === 'YONETICI') {
       state.ekran = 'yonetici';
       yoneticiDinlemeBaslat();
-      eskiFotograflariTemizle(); // 10 günden eski fotoğrafları sil
+      eskiFotograflariTemizle();
     } else {
       state.ekran = 'musteri-listesi';
-      // Personel kendi sevkiyatlarını Firestore'dan yükle
       try {
         const snap = await db.collection('sevkiyatlar')
           .where('personelId', '==', user.uid)
@@ -3283,6 +3404,31 @@ async function basla() {
           .sort((a,b) => (b.tarih||0) - (a.tarih||0));
       } catch(e) { console.warn('Sevkiyat yüklenemedi:', e.message); state.sevkiyatlar = []; }
     }
+
+    // Kayıtlı oturumu geri yükle
+    if (kayitli) {
+      if (kayitli.aktifMusteri) {
+        state.aktifMusteri = kayitli.aktifMusteri;
+      }
+      if (kayitli.aktifFisler?.length > 0) {
+        state.aktifFisler = kayitli.aktifFisler;
+      }
+      if (kayitli.oturumNo) state.oturumNo = kayitli.oturumNo;
+      if (kayitli.yoneticiSekme) state.yoneticiSekme = kayitli.yoneticiSekme;
+      if (kayitli._sevkiyatNot) state._sevkiyatNot = kayitli._sevkiyatNot;
+      if (kayitli.aktifSevkiyatDetayId) {
+        const detay = (state.sevkiyatlar || []).find(s => s.fsId === kayitli.aktifSevkiyatDetayId)
+          || (state.yoneticiSevkiyatlar || []).find(s => s.fsId === kayitli.aktifSevkiyatDetayId);
+        if (detay) state.aktifSevkiyatDetay = detay;
+      }
+      if (kayitli.ekranGecmisi) state.ekranGecmisi = kayitli.ekranGecmisi;
+      // Giriş/ilk-kurulum hariç kayıtlı ekrana dön
+      const guvenliEkranlar = ['musteri-listesi','toplu-cekim','inceleme','sevkiyat-listesi','sevkiyat-detay','yonetici'];
+      if (kayitli.ekran && guvenliEkranlar.includes(kayitli.ekran)) {
+        state.ekran = kayitli.ekran;
+      }
+    }
+
     render();
   });
 }
