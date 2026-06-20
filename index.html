@@ -2046,19 +2046,22 @@ function derilerGrupla(deriler) {
   });
 }
 
-function grupKartiHtml(g) {
+// ctx = { fsId, indices } — foto gösterimi için; inceleme ekranında null geçilir
+function grupKartiHtml(g, ctx) {
   const ecoTag = g.ecoGrup
     ? '<span style="background:var(--amber);color:#000;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;margin-left:6px">ECO</span>'
     : '';
+  const fotoCagri = ctx?.fsId && ctx?.indices?.length
+    ? `onclick="grupFotoGoster('${ctx.fsId}',[${ctx.indices.join(',')}])"` : '';
   return `
-    <div class="card" style="border-left:4px solid ${g.ecoGrup ? 'var(--amber)' : 'var(--leather)'};padding:14px">
+    <div class="card" ${fotoCagri} style="border-left:4px solid ${g.ecoGrup ? 'var(--amber)' : 'var(--leather)'};padding:14px${fotoCagri ? ';cursor:pointer' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
         <div>
           <div style="font-weight:700;font-size:15px">${g.cins} · ${g.renk}${ecoTag}</div>
           <div class="mono" style="font-size:12px;color:var(--ink-soft);margin-top:2px">Kod: ${g.kod} · Kalite: ${[...g.kaliteler].join(', ')}</div>
         </div>
         <div style="text-align:right">
-          <div style="font-size:11px;color:var(--ink-faint)">${g.fisler.length} fiş</div>
+          <div style="font-size:16px;font-weight:800;color:var(--leather)">${g.fisler.length} <span style="font-size:13px">paket</span>${fotoCagri ? ' 📷' : ''}</div>
         </div>
       </div>
       <div style="display:flex;gap:16px;margin-top:10px;padding-top:8px;border-top:1px solid var(--line);font-size:14px">
@@ -2396,7 +2399,11 @@ function ekranSevkiyatDetay() {
   const stdDm2 = stdGruplar.reduce((t,g) => t + g.toplamDm2, 0);
   const ecoDm2 = ecoGruplar.reduce((t,g) => t + g.toplamDm2, 0);
 
-  const grupHtml = gruplar.map(g => grupKartiHtml(g)).join('');
+  const derilerAll = s.deriler || [];
+  const grupHtml = gruplar.map(g => {
+    const indices = g.fisler.map(f => derilerAll.indexOf(f)).filter(i => i >= 0);
+    return grupKartiHtml(g, (s.fotoSayisi||0) > 0 ? {fsId: s.fsId, indices} : null);
+  }).join('');
 
   const dm2Top = s.toplamYuzeyDm2 || s.toplamYuzey || 0;
   const ft2Top = s.toplamYuzeyFt2 || 0;
@@ -2448,13 +2455,12 @@ function ekranSevkiyatDetay() {
         <summary style="cursor:pointer;font-size:13px;color:var(--ink-soft);padding:8px 0">📋 Tüm Paketler (${(s.deriler||[]).length})</summary>
         <div style="background:var(--bg-card);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:6px">
         ${(s.deriler||[]).map((d,i) => `
-          <div onclick="paketFotoGoster('${s.fsId}',${i})" style="padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;display:flex;gap:8px;align-items:center;cursor:pointer;active:background:var(--bg-soft)">
+          <div style="padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;display:flex;gap:8px;align-items:center">
             <span style="width:24px;color:var(--ink-faint);font-weight:700">${i+1}</span>
             <span style="flex:1">${d.cins} · ${d.renk} · ${d.kalite}</span>
             <span class="mono">${d.deriAdedi}ad</span>
             <span class="mono" style="font-weight:700">${(d.toplamYuzeyDm2||0).toFixed(0)}</span>
             <span class="mono" style="color:var(--ink-faint);font-size:11px">${(d.toplamYuzeyFt2||0).toFixed(2)}</span>
-            ${(s.fotoSayisi||0) > 0 ? '<span style="color:var(--ink-faint);font-size:16px">📷</span>' : ''}
           </div>`).join('')}
         </div>
       </details>
@@ -2663,6 +2669,59 @@ async function exifDuzelt(dataUrl) {
     img.onerror = () => resolve(dataUrl);
     img.src = dataUrl;
   });
+}
+
+// Grup kartına basınca o grubun tüm paket fotoğraflarını göster
+async function grupFotoGoster(fsId, indices) {
+  const mbg = document.createElement('div');
+  mbg.className = 'modal-bg';
+  mbg.innerHTML = `<div class="modal" onclick="event.stopPropagation()" style="max-width:95vw;padding:16px">
+    <div class="modal-handle"></div>
+    <div style="text-align:center;padding:20px;color:var(--ink-faint)">📷 Yükleniyor...</div>
+  </div>`;
+  mbg.onclick = () => mbg.remove();
+  document.body.appendChild(mbg);
+  const modalEl = mbg.querySelector('.modal');
+  try {
+    const snap = await db.collection('sevkiyatlar').doc(fsId)
+      .collection('fotograflar').orderBy('sira').get();
+    const tumDocs = snap.docs;
+    // indices listesinde olan sira değerlerine sahip fotoğrafları al
+    const seciliDocs = tumDocs.filter(d => indices.includes(d.data().sira ?? tumDocs.indexOf(d)));
+    const kaynakDocs = seciliDocs.length > 0 ? seciliDocs : tumDocs.filter((_,i) => indices.includes(i));
+    if (kaynakDocs.length === 0) {
+      modalEl.innerHTML = `<div class="modal-handle"></div>
+        <div style="text-align:center;padding:20px;color:var(--ink-faint)">Bu grup için fotoğraf bulunamadı</div>
+        <button class="btn secondary" onclick="document.querySelector('.modal-bg').remove()">Kapat</button>`;
+      return;
+    }
+    const fotolar = await Promise.all(kaynakDocs.map(d => exifDuzelt(d.data().foto)));
+    let aktif = 0;
+    const galeriGuncelle = () => {
+      const imgEl = modalEl.querySelector('img');
+      const sayiEl = modalEl.querySelector('.galeri-sayi');
+      const oncekiBtn = modalEl.querySelector('.galeri-onceki');
+      const sonrakiBtn = modalEl.querySelector('.galeri-sonraki');
+      if (imgEl) imgEl.src = fotolar[aktif];
+      if (sayiEl) sayiEl.textContent = `${aktif+1} / ${fotolar.length} paket`;
+      if (oncekiBtn) oncekiBtn.disabled = aktif === 0;
+      if (sonrakiBtn) sonrakiBtn.disabled = aktif === fotolar.length - 1;
+    };
+    modalEl.innerHTML = `<div class="modal-handle"></div>
+      <div class="galeri-sayi" style="font-size:12px;color:var(--ink-faint);text-align:center;margin-bottom:8px">1 / ${fotolar.length} paket</div>
+      <img src="${fotolar[0]}" style="width:100%;border-radius:8px;max-height:70vh;object-fit:contain;display:block">
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn secondary galeri-onceki" style="flex:1" disabled>◀</button>
+        <button class="btn secondary galeri-sonraki" style="flex:1" ${fotolar.length === 1 ? 'disabled' : ''}>▶</button>
+        <button class="btn secondary" style="flex:1" onclick="document.querySelector('.modal-bg').remove()">Kapat</button>
+      </div>`;
+    modalEl.querySelector('.galeri-onceki').onclick = () => { if (aktif > 0) { aktif--; galeriGuncelle(); } };
+    modalEl.querySelector('.galeri-sonraki').onclick = () => { if (aktif < fotolar.length-1) { aktif++; galeriGuncelle(); } };
+  } catch(e) {
+    modalEl.innerHTML = `<div class="modal-handle"></div>
+      <div style="color:var(--red);padding:16px">Fotoğraf yüklenemedi: ${escapeHtml(e.message)}</div>
+      <button class="btn secondary" onclick="document.querySelector('.modal-bg').remove()">Kapat</button>`;
+  }
 }
 
 async function paketFotoGoster(fsId, paketIndex) {
