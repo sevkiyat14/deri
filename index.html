@@ -337,6 +337,15 @@ window.addEventListener('popstate', (e) => {
   // Modal açıksa önce onu kapat
   const modal = document.querySelector('.modal-bg');
   if (modal) { modal.remove(); history.pushState({}, '', ''); return; }
+  // Kaydedilmemiş fiş varsa onay sor
+  if (state.aktifFisler?.length > 0) {
+    history.pushState({}, '', ''); // geri gitmesini engelle
+    if (!confirm('Bu oturumdaki tüm fişler kaybolacak. Emin misiniz?')) return;
+    state.aktifMusteri = null; state.aktifFisler = []; state.oturumNo = null;
+    state.ekranGecmisi = [];
+    ekranGit(state.profil?.rol === 'YONETICI' ? 'yonetici' : 'musteri-listesi');
+    return;
+  }
   geriDon();
 });
 
@@ -1111,6 +1120,9 @@ function tarihFormatla(z) {
 function tarihKisa(z) {
   const d = new Date(z);
   return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()}`;
+}
+function sayiFormatla(n) {
+  return Math.round(n).toLocaleString('tr-TR');
 }
 function guvenSinifi(g) { if (g >= 0.8) return 'confidence-high'; if (g >= 0.5) return 'confidence-med'; return 'confidence-low'; }
 function guvenChipSinifi(g) { if (g >= 0.8) return 'high'; if (g >= 0.5) return 'med'; return 'low'; }
@@ -2527,7 +2539,7 @@ function ekranSevkiyatDetay() {
         ${s.kontrolDurumu === 'onaylandi'
           ? `<span style="font-size:20px">✅</span><div><div style="font-weight:700;color:var(--green)">Kontrol Edildi</div><div style="font-size:11px;color:var(--ink-faint)">${s.kontrolEden || ''} · ${s.kontrolTarihi ? tarihFormatla(s.kontrolTarihi) : ''}</div></div>`
           : `<span style="font-size:20px">⏳</span><div style="font-weight:600;color:var(--ink-soft)">Kontrol Bekliyor</div>`}
-        ${state.profil?.rol === 'YONETICI' && s.kontrolDurumu !== 'onaylandi' ? `<button class="btn green btn-small" style="margin-left:auto" onclick="sevkiyatKontrolOnay('${s.fsId}')">✓ Onayla</button>` : ''}
+        ${state.profil?.rol === 'YONETICI' && state.profil?.onayYetkisi && s.kontrolDurumu !== 'onaylandi' ? `<button class="btn green btn-small" style="margin-left:auto" onclick="sevkiyatKontrolOnay('${s.fsId}')">✓ Onayla</button>` : (state.profil?.rol === 'YONETICI' && !state.profil?.onayYetkisi && s.kontrolDurumu !== 'onaylandi' ? `<span style="font-size:11px;color:var(--ink-faint);margin-left:auto">Onay yetkiniz yok</span>` : '')}
       </div>
 
       <div class="flex gap-2 mb-3" style="flex-wrap:wrap">
@@ -3153,6 +3165,7 @@ function sevkiyatKarti(s) {
 }
 
 function sevkiyatKartiOnay(s) {
+  const paketSayisi = (s.deriler||[]).length || (s.fotoSayisi > 0 ? s.fotoSayisi : '?');
   return `<div class="shipment-item" onclick="yoneticiSevkiyatDetay('${s.fsId}')"
     style="border-left:4px solid var(--amber);background:linear-gradient(135deg,var(--bg-card),var(--amber-soft))">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
@@ -3162,7 +3175,10 @@ function sevkiyatKartiOnay(s) {
     <div style="flex:1">
       <div style="font-weight:700;font-size:15px">${s.musteriAd}</div>
       <div style="font-size:12px;color:var(--ink-soft)">${s.sevkiyatNo} · 👤 ${s.personelAd||'?'}</div>
-      <div style="font-size:13px;margin-top:4px">🐂 ${s.toplamAdet} deri · 📐 ${(s.toplamYuzeyDm2||0).toFixed(0)} dm²</div>
+      <div style="display:flex;gap:14px;margin-top:8px;align-items:baseline">
+        <span style="font-size:20px;font-weight:800;color:var(--leather-dark)">${paketSayisi} <span style="font-size:13px;font-weight:600">paket</span></span>
+        <span style="font-size:20px;font-weight:800;color:var(--leather-dark)">${sayiFormatla(s.toplamYuzeyDm2||0)} <span style="font-size:13px;font-weight:600">dm²</span></span>
+      </div>
       ${s.not ? `<div style="margin-top:6px;padding:5px 8px;background:rgba(255,255,255,0.3);border-radius:5px;font-size:12px">📝 ${escapeHtml(s.not)}</div>` : ''}
     </div>
   </div>`;
@@ -3281,24 +3297,27 @@ async function kullaniciListesiYukle() {
       const durum = k.aktif !== false ? '<span style="color:var(--green);font-size:11px">● Aktif</span>' : '<span style="color:var(--red);font-size:11px">● Pasif</span>';
       const isYon = k.rol === 'YONETICI';
       const butonStil = 'font-size:11px;padding:5px 10px;background:none;border-radius:6px;cursor:pointer;border:1px solid';
+      const onayYetkisi = k.onayYetkisi === true;
+      const onayBadge = onayYetkisi ? '<span style="background:var(--green);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:999px;margin-left:4px">✓ Onay</span>' : '';
       return `
         <div class="card" style="margin-bottom:8px;${aktifStil}">
           <div style="display:flex;align-items:center;gap:10px">
             <div style="font-size:28px">${rolIcon}</div>
             <div style="flex:1">
-              <div style="font-weight:700;font-size:15px">${escapeHtml(k.ad || '?')}</div>
+              <div style="font-weight:700;font-size:15px">${escapeHtml(k.ad || '?')}${onayBadge}</div>
               <div style="font-size:12px;color:var(--ink-faint)">@${escapeHtml(kullaniciAdiGoster(k.email))} · ${escapeHtml(k.rol)}</div>
               <div style="margin-top:2px">${durum}</div>
             </div>
           </div>
-          ${true ? `<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
+          <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
             <button onclick="kullaniciDuzenle('${k.uid}','${(k.ad||'').replace(/'/g,'')}')" style="${butonStil} var(--ink-faint);color:var(--ink-soft)">✏ Düzenle</button>
             <button onclick="sifreResetGonder('${k.email || ''}')" style="${butonStil} var(--ink-faint);color:var(--ink-soft)">🔑 Şifre</button>
             <button onclick="kullaniciRolDegistir('${k.uid}','${k.rol}')" style="${butonStil} var(--ink-faint);color:var(--ink-soft)">🔄 Rol</button>
+            <button onclick="kullaniciOnayYetkisiDegistir('${k.uid}',${onayYetkisi})" style="${butonStil} ${onayYetkisi ? 'var(--green);color:var(--green)' : 'var(--ink-faint);color:var(--ink-soft)'}">✅ Onay Yetkisi</button>
             ${k.aktif !== false
               ? `<button onclick="kullaniciDurumDegistir('${k.uid}',false)" style="${butonStil} var(--red);color:var(--red)">⛔ Pasifle</button>`
               : `<button onclick="kullaniciDurumDegistir('${k.uid}',true)" style="${butonStil} var(--green);color:var(--green)">✅ Aktifle</button>`}
-          </div>` : ''}
+          </div>
         </div>`;
     }).join('');
   } catch(e) {
@@ -3321,6 +3340,17 @@ async function kullaniciDuzenle(uid, mevcutAd) {
     await db.collection('users').doc(uid).update({ ad: yeniAd.trim() });
     toast('✓ İsim güncellendi');
     kullaniciListesiYukle();
+  } catch(e) { toast('Hata: ' + e.message, 3000); }
+}
+
+async function kullaniciOnayYetkisiDegistir(uid, mevcutDeger) {
+  const yeni = !mevcutDeger;
+  try {
+    await db.collection('users').doc(uid).update({ onayYetkisi: yeni });
+    toast(yeni ? '✓ Onay yetkisi verildi' : '✓ Onay yetkisi kaldırıldı');
+    kullaniciListesiYukle();
+    // Kendi profilimiz değiştiyse state'i güncelle
+    if (uid === state.kullanici?.uid) state.profil.onayYetkisi = yeni;
   } catch(e) { toast('Hata: ' + e.message, 3000); }
 }
 
