@@ -2393,7 +2393,7 @@ function ekranSevkiyatDetay() {
         <div class="customer-name">${s.musteriAd}</div>
         <div class="code">${s.musteriKod || ''} • ${tarihFormatla(s.tarih)} • 👤 ${s.personelAd || '?'}</div>
         <div class="summary-grid">
-          <div class="item"><div class="value">${(s.deriler||[]).length}</div><div class="label">Fiş</div></div>
+          <div class="item"><div class="value">${(s.deriler||[]).length}</div><div class="label">Paket</div></div>
           <div class="item"><div class="value">${s.toplamAdet}</div><div class="label">Deri</div></div>
           <div class="item">
             <div class="value">${dm2Top.toFixed(0)}</div>
@@ -2413,7 +2413,7 @@ function ekranSevkiyatDetay() {
         ${s.kontrolDurumu === 'onaylandi'
           ? `<span style="font-size:20px">✅</span><div><div style="font-weight:700;color:var(--green)">Kontrol Edildi</div><div style="font-size:11px;color:var(--ink-faint)">${s.kontrolEden || ''} · ${s.kontrolTarihi ? tarihFormatla(s.kontrolTarihi) : ''}</div></div>`
           : `<span style="font-size:20px">⏳</span><div style="font-weight:600;color:var(--ink-soft)">Kontrol Bekliyor</div>`}
-        ${state.profil?.rol === 'YONETICI' && s.kontrolDurumu !== 'onaylandi' ? `<button class="btn green btn-small" style="margin-left:auto" onclick="sevkiyatKontrolEt('${s.fsId}')">✓ Onayla</button>` : ''}
+        ${state.profil?.rol === 'YONETICI' && s.kontrolDurumu !== 'onaylandi' ? `<button class="btn green btn-small" style="margin-left:auto" onclick="sevkiyatKontrolOnay('${s.fsId}')">✓ Onayla</button>` : ''}
       </div>
 
       <div class="flex gap-2 mb-3" style="flex-wrap:wrap">
@@ -2540,6 +2540,29 @@ async function yoneticiSifirla() {
 }
 
 // ====== YÖNETİCİ KONTROL + FOTOĞRAF ======
+function sevkiyatKontrolOnay(fsId) {
+  const s = state.yoneticiSevkiyatlar?.find(x => x.fsId === fsId) || state.aktifSevkiyatDetay;
+  if (!s) return;
+  const mbg = document.createElement('div');
+  mbg.className = 'modal-bg';
+  mbg.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()" style="padding:24px">
+      <div class="modal-handle"></div>
+      <div style="text-align:center;margin-bottom:16px">
+        <div style="font-size:36px;margin-bottom:8px">✅</div>
+        <h3>Sevkiyatı Onayla?</h3>
+        <div style="font-size:14px;color:var(--ink-soft);margin-top:6px">${s.musteriAd} · ${s.sevkiyatNo}</div>
+        <div style="font-size:13px;color:var(--ink-faint)">${s.toplamAdet} deri · ${(s.toplamYuzeyDm2||0).toFixed(0)} dm²</div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn secondary" style="flex:1" onclick="document.querySelector('.modal-bg').remove()">İptal</button>
+        <button class="btn green" style="flex:2" onclick="document.querySelector('.modal-bg').remove();sevkiyatKontrolEt('${fsId}')">✓ Evet, Onayla</button>
+      </div>
+    </div>`;
+  mbg.onclick = () => mbg.remove();
+  document.body.appendChild(mbg);
+}
+
 async function sevkiyatKontrolEt(fsId) {
   if (!fsId) return;
   try {
@@ -2555,11 +2578,11 @@ async function sevkiyatKontrolEt(fsId) {
       state.aktifSevkiyatDetay.kontrolTarihi = Date.now();
       state.aktifSevkiyatDetay.kontrolEden = state.profil?.ad;
     }
-    toast('✅ Sevkiyat onaylandı — PDF hazırlanıyor...', 3000);
     render();
-    // Onay sonrası otomatik PDF indir
+    toast('✅ Sevkiyat onaylandı', 2000);
+    // Onay sonrası PDF indir/paylaş
     const pdfBoyut = await Storage.get('app:pdfBoyut') || 'A4';
-    setTimeout(() => pdfUret(fsId, pdfBoyut), 500);
+    setTimeout(() => pdfUret(fsId, pdfBoyut), 400);
   } catch(e) { toast('Hata: ' + e.message, 3000); }
 }
 
@@ -2718,25 +2741,15 @@ function ekranYonetici() {
 
   } else if (state.yoneticiSekme === 'arama') {
     const aramaVal = state._yoneticiArama || '';
-    const sonuclar = aramaVal.length >= 2 ? sevk.filter(s => {
-      const q = aramaVal.toLowerCase();
-      return (s.sevkiyatNo || '').toLowerCase().includes(q)
-        || tarihKisa(s.tarih).includes(q)
-        || (s.musteriAd || '').toLowerCase().includes(q);
-    }).slice().sort((a,b)=>b.tarih-a.tarih) : [];
-
+    // Sonuçları ayrı div'e render et — input'u yeniden çizmeden cursor korunur
     icerik = `
       <div style="margin-bottom:14px">
         <input class="input" id="yonetici-arama" placeholder="Sevkiyat no (S-0001) veya tarih (31.12.2025)..."
           value="${escapeHtml(aramaVal)}"
-          oninput="state._yoneticiArama=this.value;render()"
+          oninput="aramaGuncelle(this.value)"
           style="font-size:15px">
       </div>
-      ${aramaVal.length < 2
-        ? '<div style="text-align:center;color:var(--ink-faint);padding:20px;font-size:13px">En az 2 karakter girin</div>'
-        : sonuclar.length === 0
-          ? '<div class="empty"><div class="icon">🔍</div><div>Sonuç bulunamadı</div></div>'
-          : `<div style="font-size:12px;color:var(--ink-faint);margin-bottom:8px">${sonuclar.length} sonuç</div>` + sonuclar.map(s => sevkiyatKarti(s)).join('')}`;
+      <div id="arama-sonuclar">${aramaHtml(aramaVal, sevk)}</div>`;
 
   } else if (state.yoneticiSekme === 'musteri') {
     // Her müşteri için sevkiyatları ayrı ayrı göster, tıklayınca detay
@@ -2861,15 +2874,31 @@ function sevkiyatKartiOnay(s) {
       <span style="background:var(--amber);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;text-transform:uppercase">⏳ Onay Bekliyor</span>
       <span style="font-size:12px;color:var(--ink-faint);margin-left:auto">${tarihFormatla(s.tarih)}</span>
     </div>
-    <div style="display:flex;align-items:center;gap:8px">
-      <div style="flex:1">
-        <div style="font-weight:700;font-size:15px">${s.musteriAd}</div>
-        <div style="font-size:12px;color:var(--ink-soft)">${s.sevkiyatNo} · 👤 ${s.personelAd||'?'}</div>
-        <div style="font-size:13px;margin-top:4px">🐂 ${s.toplamAdet} deri · 📐 ${(s.toplamYuzeyDm2||0).toFixed(0)} dm²</div>
-      </div>
-      <button class="btn green btn-small" onclick="event.stopPropagation();sevkiyatKontrolEt('${s.fsId}')">✓ Onayla</button>
+    <div style="flex:1">
+      <div style="font-weight:700;font-size:15px">${s.musteriAd}</div>
+      <div style="font-size:12px;color:var(--ink-soft)">${s.sevkiyatNo} · 👤 ${s.personelAd||'?'}</div>
+      <div style="font-size:13px;margin-top:4px">🐂 ${s.toplamAdet} deri · 📐 ${(s.toplamYuzeyDm2||0).toFixed(0)} dm²</div>
     </div>
   </div>`;
+}
+
+function aramaHtml(aramaVal, sevk) {
+  if (aramaVal.length < 2) return '<div style="text-align:center;color:var(--ink-faint);padding:20px;font-size:13px">En az 2 karakter girin</div>';
+  const q = aramaVal.toLowerCase();
+  const sonuclar = sevk.filter(s =>
+    (s.sevkiyatNo || '').toLowerCase().includes(q)
+    || tarihKisa(s.tarih).includes(q)
+    || (s.musteriAd || '').toLowerCase().includes(q)
+  ).slice().sort((a,b)=>b.tarih-a.tarih);
+  if (sonuclar.length === 0) return '<div class="empty"><div class="icon">🔍</div><div>Sonuç bulunamadı</div></div>';
+  return `<div style="font-size:12px;color:var(--ink-faint);margin-bottom:8px">${sonuclar.length} sonuç</div>` + sonuclar.map(s => sevkiyatKarti(s)).join('');
+}
+
+function aramaGuncelle(val) {
+  state._yoneticiArama = val;
+  // Sadece sonuç alanını güncelle — sayfayı yeniden render etme (cursor korunur)
+  const el = document.getElementById('arama-sonuclar');
+  if (el) el.innerHTML = aramaHtml(val, state.yoneticiSevkiyatlar || []);
 }
 
 function yoneticiSekme(sekme) {
@@ -2892,23 +2921,31 @@ async function personelEkle() {
   if (!ad || !mail || !sifre) { sonEl.innerHTML='<span style="color:red">Tüm alanlar zorunlu</span>'; return; }
   sonEl.textContent = 'Ekleniyor...';
   try {
-    // Geçici ikincil auth ile hesap aç (mevcut yönetici oturumu korunur)
-    // Sabit isim kullan; varsa mevcut uygulamayı al, yoksa yenisini oluştur
+    // Her çağrıda temiz bir ikincil app kullan (öncekini sil)
     const appName = 'personelEkleTemp';
-    let ikincilApp;
-    try { ikincilApp = firebase.app(appName); }
-    catch(e) { ikincilApp = firebase.initializeApp(firebase.apps[0].options, appName); }
+    try { await firebase.app(appName).delete(); } catch(e) {}
+    const ikincilApp = firebase.initializeApp(firebase.apps[0].options, appName);
     const ikincilAuth = ikincilApp.auth();
-    const cred = await ikincilAuth.createUserWithEmailAndPassword(mail, sifre);
-    const uid  = cred.user.uid;
-    // Yeni kullanıcı hâlâ ikincil oturumda iken kendi belgesini yazar
-    // (Firestore kuralı "kendi belgesini yaz" ise bu geçer)
+    let uid;
+    try {
+      const cred = await ikincilAuth.createUserWithEmailAndPassword(mail, sifre);
+      uid = cred.user.uid;
+    } catch(authErr) {
+      await ikincilAuth.signOut().catch(()=>{});
+      await ikincilApp.delete().catch(()=>{});
+      if (authErr.code === 'auth/email-already-in-use') {
+        sonEl.innerHTML = `<span style="color:var(--amber)">⚠ "${mail}" zaten kayıtlı. Farklı bir kullanıcı adı deneyin.</span>`;
+      } else {
+        sonEl.innerHTML = `<span style="color:red">Hata: ${escapeHtml(authErr.message)}</span>`;
+      }
+      return;
+    }
     const ikincilDb = ikincilApp.firestore();
     await ikincilDb.collection('users').doc(uid).set({ ad, email: mail, rol: 'PERSONEL', aktif: true, olusturma: Date.now() });
     await ikincilAuth.signOut();
     await ikincilApp.delete();
     ['pers-ad','pers-mail','pers-sifre'].forEach(id => document.getElementById(id).value = '');
-    sonEl.innerHTML = `<span style="color:var(--green)">✓ ${ad} eklendi</span>`;
+    sonEl.innerHTML = `<span style="color:var(--green)">✓ ${escapeHtml(ad)} eklendi (${mail})</span>`;
   } catch(e) {
     sonEl.innerHTML = `<span style="color:red">Hata: ${escapeHtml(e.message)}</span>`;
   }
