@@ -1099,19 +1099,33 @@ async function ocrYap(imageData, onProgress) {
 }
 
 // ====== YARDIMCILAR ======
-function uretSevkiyatNo() {
-  // Mevcut sevkiyatlardan en yüksek numarayı bul, +1 ile devam et
-  const tumSevk = (state.sevkiyatlar || []).concat(state.yoneticiSevkiyatlar || []);
-  let max = 0;
-  for (const s of tumSevk) {
-    const m = (s.sevkiyatNo || '').match(/^S-(\d+)$/);
-    if (m) { const n = parseInt(m[1], 10); if (n > max) max = n; }
+// Sevkiyat numarasını Firestore transaction ile üretir — eşzamanlı çakışmayı önler
+async function uretSevkiyatNo() {
+  try {
+    const ref = db.collection('sayaclar').doc('sevkiyat');
+    const yeni = await db.runTransaction(async tx => {
+      const doc = await tx.get(ref);
+      const mevcut = doc.exists ? (doc.data().son || 0) : 0;
+      const sonraki = mevcut + 1;
+      tx.set(ref, { son: sonraki }, { merge: true });
+      return sonraki;
+    });
+    localStorage.setItem('ds_sevkiyat_sayac', String(yeni));
+    return `S-${String(yeni).padStart(4, '0')}`;
+  } catch(e) {
+    // Firestore erişilemezse yerel sayaca düş (çevrimdışı yedek)
+    console.warn('Sevkiyat no transaction hatası, yerel sayaç:', e.message);
+    const tumSevk = (state.sevkiyatlar || []).concat(state.yoneticiSevkiyatlar || []);
+    let max = 0;
+    for (const s of tumSevk) {
+      const m = (s.sevkiyatNo || '').match(/^S-(\d+)$/);
+      if (m) { const n = parseInt(m[1], 10); if (n > max) max = n; }
+    }
+    const kayitliMax = parseInt(localStorage.getItem('ds_sevkiyat_sayac') || '0', 10);
+    const yeni = Math.max(max, kayitliMax) + 1;
+    localStorage.setItem('ds_sevkiyat_sayac', String(yeni));
+    return `S-${String(yeni).padStart(4, '0')}`;
   }
-  // localStorage'da da sayacı tut (ilk oturumda liste boş olabilir)
-  const kayitliMax = parseInt(localStorage.getItem('ds_sevkiyat_sayac') || '0', 10);
-  const yeni = Math.max(max, kayitliMax) + 1;
-  localStorage.setItem('ds_sevkiyat_sayac', String(yeni));
-  return `S-${String(yeni).padStart(4, '0')}`;
 }
 function tarihFormatla(z) {
   const d = new Date(z);
@@ -1216,7 +1230,7 @@ function ekranMusteriListesi() {
 
   return `
     <div class="topbar">
-      <div class="brand">◈ ${state.profil?.ad || kullaniciAdiGoster(state.kullanici?.email)}</div>
+      <div class="brand">◈ ${escapeHtml(state.profil?.ad || kullaniciAdiGoster(state.kullanici?.email))}</div>
       <div style="display:flex;gap:8px">
         <button onclick="ekranGit('sevkiyat-listesi');">Geçmiş</button>
 <button onclick="cikisYap()" title="Çıkış" style="opacity:0.7">⏻</button>
@@ -1244,13 +1258,15 @@ async function ayarlarDialog() {
   const googleKey = await Storage.get('app:googleApiKey') || '';
   const claudeKey = await Storage.get('app:claudeApiKey') || '';
   const pdfBoyut  = await Storage.get('app:pdfBoyut') || 'A4';
+  const fsPlan    = await Storage.get('app:firestorePlan') || 'spark';
+  const limitMB   = fsPlan === 'blaze' ? 4096 : 1000;
   // Depolama tahmini: sevkiyat sayısı × ortalama belge boyutu
   const sevkSayisi = (state.yoneticiSevkiyatlar || state.sevkiyatlar || []).length;
-  const tahminiKB  = sevkSayisi * 3; // ~3 KB/sevkiyat (fotoğrafsız)
+  const tahminiKB  = sevkSayisi * 3;
   const fotoSayisi = (state.yoneticiSevkiyatlar || []).reduce((s,x)=>s+(x.fotoSayisi||0),0);
-  const fotoKB     = fotoSayisi * 53; // ~53 KB/fotoğraf (base64 sıkıştırılmış)
+  const fotoKB     = fotoSayisi * 53;
   const toplamKB   = tahminiKB + fotoKB;
-  const limitKB    = 1024 * 1024; // 1 GB Firestore ücretsiz
+  const limitKB    = limitMB * 1024;
   const dolulukPct = Math.min(100, (toplamKB / limitKB * 100)).toFixed(2);
 
   const mbg = document.createElement('div');
@@ -1306,15 +1322,23 @@ async function ayarlarDialog() {
 
       <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--line)">
         <div style="font-weight:700;font-size:13px;margin-bottom:8px">💾 Firestore Depolama (Tahmini)</div>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:8px 14px;border:2px solid ${fsPlan==='spark'?'var(--leather)':'var(--line)'};border-radius:8px;flex:1;background:var(--bg-card)">
+            <input type="radio" name="fs-plan" value="spark" ${fsPlan==='spark'?'checked':''} onchange="Storage.set('app:firestorePlan','spark');document.querySelector('.modal-bg').remove();ayarlarDialog()"> Spark (1 GB)
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:8px 14px;border:2px solid ${fsPlan==='blaze'?'var(--leather)':'var(--line)'};border-radius:8px;flex:1;background:var(--bg-card)">
+            <input type="radio" name="fs-plan" value="blaze" ${fsPlan==='blaze'?'checked':''} onchange="Storage.set('app:firestorePlan','blaze');document.querySelector('.modal-bg').remove();ayarlarDialog()"> Blaze (4 GB)
+          </label>
+        </div>
         <div style="background:var(--bg-soft);border-radius:8px;padding:10px 14px;font-size:13px">
           <div style="display:flex;justify-content:space-between;margin-bottom:6px">
             <span>${sevkSayisi} sevkiyat · ${fotoSayisi} fotoğraf</span>
-            <span class="mono">${toplamKB < 1024 ? toplamKB.toFixed(0)+' KB' : (toplamKB/1024).toFixed(1)+' MB'} / 1 GB</span>
+            <span class="mono">${toplamKB < 1024 ? toplamKB.toFixed(0)+' KB' : (toplamKB/1024).toFixed(1)+' MB'} / ${limitMB >= 1024 ? (limitMB/1024)+' GB' : limitMB+' MB'}</span>
           </div>
           <div style="background:var(--line);border-radius:999px;height:8px;overflow:hidden">
             <div style="background:${parseFloat(dolulukPct)>80?'var(--red)':parseFloat(dolulukPct)>50?'var(--amber)':'var(--green)'};height:100%;width:${dolulukPct}%;border-radius:999px;transition:width 0.3s"></div>
           </div>
-          <div style="font-size:11px;color:var(--ink-faint);margin-top:4px">%${dolulukPct} dolu · Fotoğraf başına ~53 KB hesaplanmıştır</div>
+          <div style="font-size:11px;color:var(--ink-faint);margin-top:4px">%${dolulukPct} dolu · Limit aşılınca en eski fotoğraflar otomatik silinir</div>
         </div>
       </div>
 
@@ -1441,9 +1465,9 @@ async function musteriDuzenle(id) {
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modal-handle"></div>
       <h2>Müşteri Düzenle</h2>
-      <div class="input-group"><label class="input-label">Ad</label><input class="input" id="me-ad" value="${m.ad}"></div>
-      <div class="input-group"><label class="input-label">Kod</label><input class="input mono" id="me-kod" value="${m.kod}"></div>
-      <div class="input-group"><label class="input-label">Telefon</label><input class="input" id="me-tel" value="${m.telefon||''}"></div>
+      <div class="input-group"><label class="input-label">Ad</label><input class="input" id="me-ad" value="${escapeHtml(m.ad)}"></div>
+      <div class="input-group"><label class="input-label">Kod</label><input class="input mono" id="me-kod" value="${escapeHtml(m.kod)}"></div>
+      <div class="input-group"><label class="input-label">Telefon</label><input class="input" id="me-tel" value="${escapeHtml(m.telefon||'')}"></div>
       <div class="input-group">
         <label class="input-label">Birim</label>
         <div style="display:flex;gap:8px">
@@ -1602,7 +1626,7 @@ async function yeniMusteriKaydet() {
 async function musteriSec(id) {
   state.aktifMusteri = state.musteriler.find(m => m.id === id);
   state.aktifFisler = [];
-  state.oturumNo = uretSevkiyatNo();
+  state.oturumNo = await uretSevkiyatNo();
   ekranGit('toplu-cekim');
 }
 
@@ -1928,14 +1952,14 @@ function fisDuzeltModal(fis) {
       </div>
       ${fis.foto ? `<img src="${fis.foto}" class="photo-preview">` : ''}
       ${uyarilar}
-      <div class="input-group"><label class="input-label">Cins</label><input class="input ${guvenSinifi(v.cins.guven)}" id="d-cins" value="${v.cins.deger}"></div>
-      <div class="input-group"><label class="input-label">Renk</label><input class="input ${guvenSinifi(v.renk.guven)}" id="d-renk" value="${v.renk.deger}"></div>
-      <div class="input-group"><label class="input-label">Kod</label><input class="input mono ${guvenSinifi(v.kod.guven)}" id="d-kod" value="${v.kod.deger}"></div>
+      <div class="input-group"><label class="input-label">Cins</label><input class="input ${guvenSinifi(v.cins.guven)}" id="d-cins" value="${escapeHtml(v.cins.deger)}"></div>
+      <div class="input-group"><label class="input-label">Renk</label><input class="input ${guvenSinifi(v.renk.guven)}" id="d-renk" value="${escapeHtml(v.renk.deger)}"></div>
+      <div class="input-group"><label class="input-label">Kod</label><input class="input mono ${guvenSinifi(v.kod.guven)}" id="d-kod" value="${escapeHtml(v.kod.deger)}"></div>
       <div class="flex gap-2">
-        <div class="input-group grow"><label class="input-label">Kalite</label><input class="input mono ${guvenSinifi(v.kalite.guven)}" id="d-kalite" value="${v.kalite.deger}"></div>
+        <div class="input-group grow"><label class="input-label">Kalite</label><input class="input mono ${guvenSinifi(v.kalite.guven)}" id="d-kalite" value="${escapeHtml(v.kalite.deger)}"></div>
         <div class="input-group grow"><label class="input-label">Deri Adedi</label><input class="input mono ${guvenSinifi(v.deriAdedi.guven)}" id="d-adet" type="number" value="${v.deriAdedi.deger || ''}"></div>
       </div>
-      <div class="input-group"><label class="input-label">Seri No</label><input class="input mono ${guvenSinifi(v.seriNo.guven)}" id="d-seri" value="${v.seriNo.deger}"></div>
+      <div class="input-group"><label class="input-label">Seri No</label><input class="input mono ${guvenSinifi(v.seriNo.guven)}" id="d-seri" value="${escapeHtml(v.seriNo.deger)}"></div>
 
       <!-- TOPLAM YÜZEY -->
       <div class="flex gap-2">
@@ -2116,8 +2140,8 @@ function grupKartiHtml(g, ctx) {
     <div class="card" ${fotoCagri} style="border-left:4px solid ${g.ecoGrup ? 'var(--amber)' : 'var(--leather)'};padding:14px${fotoCagri ? ';cursor:pointer' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
         <div>
-          <div style="font-weight:700;font-size:15px">${g.cins} · ${g.renk}${ecoTag}</div>
-          <div class="mono" style="font-size:12px;color:var(--ink-soft);margin-top:2px">Kod: ${g.kod} · Kalite: ${[...g.kaliteler].join(', ')}</div>
+          <div style="font-weight:700;font-size:15px">${escapeHtml(g.cins)} · ${escapeHtml(g.renk)}${ecoTag}</div>
+          <div class="mono" style="font-size:12px;color:var(--ink-soft);margin-top:2px">Kod: ${escapeHtml(g.kod)} · Kalite: ${escapeHtml([...g.kaliteler].join(', '))}</div>
         </div>
         <div style="text-align:right">
           <div style="font-size:16px;font-weight:800;color:var(--leather)">${g.fisler.length} <span style="font-size:13px">paket</span>${fotoCagri ? ' 📷' : ''}</div>
@@ -2155,7 +2179,7 @@ function ekranInceleme() {
     const v = f.veri;
     return `<div onclick="fisDuzelt(${idx})" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px">
       <span style="width:24px;color:var(--ink-faint);font-weight:700">${idx+1}</span>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.cins.deger} · ${v.kod.deger} · ${v.kalite.deger}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(v.cins.deger)} · ${escapeHtml(v.kod.deger)} · ${escapeHtml(v.kalite.deger)}</span>
       <span class="mono">${v.deriAdedi.deger}ad</span>
       <span class="mono" style="color:var(--ink-soft)">${(v.toplamYuzeyDm2?.deger||0).toFixed(0)}</span>
     </div>`;
@@ -2169,10 +2193,10 @@ function ekranInceleme() {
     </div>
     <div class="content">
       <div class="summary">
-        <div class="customer-name">${m.ad}</div>
-        <div class="code">${m.kod}</div>
+        <div class="customer-name">${escapeHtml(m.ad)}</div>
+        <div class="code">${escapeHtml(m.kod)}</div>
         <div class="summary-grid">
-          <div class="item"><div class="value">${onayli.length}</div><div class="label">Fiş</div></div>
+          <div class="item"><div class="value">${onayli.length}</div><div class="label">Paket</div></div>
           <div class="item"><div class="value">${toplamAdet}</div><div class="label">Deri</div></div>
           <div class="item">
             <div class="value">${toplamDm2.toFixed(0)}</div>
@@ -2191,7 +2215,7 @@ function ekranInceleme() {
       ${grupHtml}
 
       <details style="margin-top:12px">
-        <summary style="cursor:pointer;font-size:13px;color:var(--ink-soft);padding:8px 0">📋 Tüm Fişler (${onayli.length}) — düzenlemek için tıklayın</summary>
+        <summary style="cursor:pointer;font-size:13px;color:var(--ink-soft);padding:8px 0">📋 Tüm Paketler (${onayli.length}) — düzenlemek için tıklayın</summary>
         <div style="background:var(--bg-card);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:8px">
           ${fisListesi}
         </div>
@@ -2275,17 +2299,20 @@ async function sevkiyatKaydet() {
     };
 
     // Fotoğrafları ana doc'tan ayır (Firestore 1MB limiti)
-    const fotograflar = sevkiyat.deriler.filter(d => d.foto).map(d => d.foto);
+    // Her fotoğrafı ait olduğu deri (paket) index'i ile sakla — eşleşme kayması olmasın
+    const fotoKayitlari = [];
+    sevkiyat.deriler.forEach((d, idx) => { if (d.foto) fotoKayitlari.push({ deriIndex: idx, foto: d.foto }); });
     sevkiyat.deriler = sevkiyat.deriler.map(d => { const { foto, ...rest } = d; return rest; });
-    sevkiyat.fotoSayisi = fotograflar.length;
+    sevkiyat.fotoSayisi = fotoKayitlari.length;
+    sevkiyat.fotoIndeksleri = fotoKayitlari.map(f => f.deriIndex);
 
     // Firestore'a kaydet
     const docRef = await db.collection('sevkiyatlar').add(sevkiyat);
 
-    for (let i = 0; i < fotograflar.length; i++) {
+    for (let i = 0; i < fotoKayitlari.length; i++) {
       await db.collection('sevkiyatlar').doc(docRef.id)
         .collection('fotograflar').doc(String(i)).set({
-          foto: fotograflar[i], tarih: Date.now(), sira: i
+          foto: fotoKayitlari[i].foto, tarih: Date.now(), sira: i, deriIndex: fotoKayitlari[i].deriIndex
         });
     }
 
@@ -2337,10 +2364,10 @@ function basariDialog(s) {
   document.body.appendChild(mbg);
 }
 
-function devamEt() {
+async function devamEt() {
   document.querySelector('.modal-bg')?.remove();
   state.aktifFisler = [];
-  state.oturumNo = uretSevkiyatNo();
+  state.oturumNo = await uretSevkiyatNo();
   ekranGit('toplu-cekim');
 }
 
@@ -2489,7 +2516,14 @@ function sevkiyatDetayAc(fsId) {
 
 function ekranSevkiyatDetay() {
   const s = state.aktifSevkiyatDetay;
-  if (!s) { geriDon(); return ''; }
+  if (!s) {
+    // Yenileme sonrası snapshot henüz gelmediyse yükleniyor göster (geri sekme)
+    if (state._bekleyenDetayId) {
+      return `<div class="topbar"><button onclick="geriDon();" style="font-size:13px">‹ Geri</button><div class="brand">Sevkiyat</div><div style="width:80px"></div></div>
+        <div class="content"><div class="empty"><div class="icon">⏳</div><div>Sevkiyat yükleniyor...</div></div></div>`;
+    }
+    geriDon(); return '';
+  }
 
   // Grupla
   const gruplar = derilerGrupla(s.deriler || []);
@@ -2499,9 +2533,11 @@ function ekranSevkiyatDetay() {
   const ecoDm2 = ecoGruplar.reduce((t,g) => t + g.toplamDm2, 0);
 
   const derilerAll = s.deriler || [];
+  const fotoIdx = s.fotoIndeksleri || (((s.fotoSayisi||0) > 0) ? derilerAll.map((_,i)=>i) : []);
   const grupHtml = gruplar.map(g => {
     const indices = g.fisler.map(f => derilerAll.indexOf(f)).filter(i => i >= 0);
-    return grupKartiHtml(g, (s.fotoSayisi||0) > 0 ? {fsId: s.fsId, indices} : null);
+    const fotolu = indices.filter(i => fotoIdx.includes(i));
+    return grupKartiHtml(g, fotolu.length > 0 ? {fsId: s.fsId, indices: fotolu} : null);
   }).join('');
 
   const dm2Top = s.toplamYuzeyDm2 || s.toplamYuzey || 0;
@@ -2514,8 +2550,8 @@ function ekranSevkiyatDetay() {
     </div>
     <div class="content">
       <div class="summary">
-        <div class="customer-name">${s.musteriAd}</div>
-        <div class="code">${s.musteriKod || ''} • ${tarihFormatla(s.tarih)} • 👤 ${s.personelAd || '?'}</div>
+        <div class="customer-name">${escapeHtml(s.musteriAd||'')}</div>
+        <div class="code">${escapeHtml(s.musteriKod || '')} • ${tarihFormatla(s.tarih)} • 👤 ${escapeHtml(s.personelAd || '?')}</div>
         <div class="summary-grid">
           <div class="item"><div class="value">${(s.deriler||[]).length}</div><div class="label">Paket</div></div>
           <div class="item"><div class="value">${s.toplamAdet}</div><div class="label">Deri</div></div>
@@ -2552,117 +2588,24 @@ function ekranSevkiyatDetay() {
       <div class="section-title">Ürün Grupları (${gruplar.length})</div>
       ${grupHtml}
 
-      <details style="margin-top:12px">
-        <summary style="cursor:pointer;font-size:13px;color:var(--ink-soft);padding:8px 0">📋 Tüm Paketler (${(s.deriler||[]).length})</summary>
+      <details style="margin-top:12px" open>
+        <summary style="cursor:pointer;font-size:13px;color:var(--ink-soft);padding:8px 0">📋 Tüm Paketler (${(s.deriler||[]).length}) — fotoğraf için 📷'ye dokunun</summary>
         <div style="background:var(--bg-card);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:6px">
-        ${(s.deriler||[]).map((d,i) => `
-          <div style="padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;display:flex;gap:8px;align-items:center">
+        ${(s.deriler||[]).map((d,i) => {
+          const varFoto = fotoIdx.includes(i);
+          return `
+          <div ${varFoto ? `onclick="paketFotoGoster('${s.fsId}',${i})"` : ''} style="padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;display:flex;gap:8px;align-items:center${varFoto ? ';cursor:pointer' : ''}">
             <span style="width:24px;color:var(--ink-faint);font-weight:700">${i+1}</span>
-            <span style="flex:1">${d.cins} · ${d.renk} · ${d.kalite}</span>
+            <span style="flex:1">${escapeHtml(d.cins||'')} · ${escapeHtml(d.renk||'')} · ${escapeHtml(d.kalite||'')}</span>
             <span class="mono">${d.deriAdedi}ad</span>
             <span class="mono" style="font-weight:700">${(d.toplamYuzeyDm2||0).toFixed(0)}</span>
             <span class="mono" style="color:var(--ink-faint);font-size:11px">${(d.toplamYuzeyFt2||0).toFixed(2)}</span>
-          </div>`).join('')}
+            <span style="width:22px;text-align:center;font-size:15px">${varFoto ? '📷' : '<span style=\"color:var(--ink-faint);font-size:11px\">—</span>'}</span>
+          </div>`;
+        }).join('')}
         </div>
       </details>
     </div>`;
-}
-
-// ====== RAPOR GÖNDERME ======
-function raporGonder(tip) {
-  const sevk = state.yoneticiSevkiyatlar || [];
-  let filtre, baslik;
-  const bugun = new Date(); bugun.setHours(0,0,0,0);
-
-  if (tip === 'bugun') {
-    filtre = sevk.filter(s => s.tarih >= bugun.getTime());
-    baslik = `Günlük Sevkiyat Raporu — ${tarihFormatla(Date.now())}`;
-  } else if (tip === 'hafta') {
-    const haftaBasi = new Date(); haftaBasi.setDate(haftaBasi.getDate()-6); haftaBasi.setHours(0,0,0,0);
-    filtre = sevk.filter(s => s.tarih >= haftaBasi.getTime());
-    baslik = `Haftalık Rapor — ${tarihKisa(haftaBasi.getTime())} → ${tarihKisa(Date.now())}`;
-  } else {
-    filtre = sevk;
-    baslik = `Tüm Sevkiyatlar Raporu`;
-  }
-
-  if (filtre.length === 0) { toast('Rapor için veri yok'); return; }
-
-  const topAdet = filtre.reduce((s,x) => s + (x.toplamAdet||0), 0);
-  const topDm2  = filtre.reduce((s,x) => s + (x.toplamYuzeyDm2||0), 0);
-  const topFt2  = filtre.reduce((s,x) => s + (x.toplamYuzeyFt2||0), 0);
-
-  // Müşteri bazlı özet
-  const mOzet = {};
-  filtre.forEach(s => {
-    if (!mOzet[s.musteriAd]) mOzet[s.musteriAd] = {ad:s.musteriAd, adet:0, dm2:0, ft2:0, sayim:0};
-    mOzet[s.musteriAd].adet += s.toplamAdet||0;
-    mOzet[s.musteriAd].dm2  += s.toplamYuzeyDm2||0;
-    mOzet[s.musteriAd].ft2  += s.toplamYuzeyFt2||0;
-    mOzet[s.musteriAd].sayim += 1;
-  });
-
-  // Kod bazlı toplam (ECO ayrı)
-  const tDeriler = filtre.flatMap(s => s.deriler || []);
-  const gruplar = derilerGrupla(tDeriler);
-
-  let metin = `${baslik}\n${'='.repeat(40)}\n\n`;
-  metin += `GENEL TOPLAM\n`;
-  metin += `  Sevkiyat: ${filtre.length}\n  Deri: ${topAdet}\n  Yüzey: ${topDm2.toFixed(0)} dm² / ${topFt2.toFixed(2)} ft²\n\n`;
-
-  metin += `MÜŞTERİ BAZLI\n${'-'.repeat(30)}\n`;
-  Object.values(mOzet).sort((a,b)=>b.dm2-a.dm2).forEach(m => {
-    metin += `  ${m.ad}: ${m.adet} deri, ${m.dm2.toFixed(0)} dm² (${m.sayim} sevkiyat)\n`;
-  });
-
-  metin += `\nÜRÜN BAZLI\n${'-'.repeat(30)}\n`;
-  gruplar.forEach(g => {
-    metin += `  ${g.kod} ${g.cins} ${g.ecoGrup?'[ECO]':''}: ${g.toplamAdet} deri, ${g.toplamDm2.toFixed(0)} dm²\n`;
-  });
-
-  const konu = encodeURIComponent(baslik);
-  const govde = encodeURIComponent(metin);
-
-  // Paylaşım seçenekleri
-  if (navigator.share) {
-    navigator.share({ title: baslik, text: metin }).catch(() => {});
-  } else {
-    window.open(`mailto:?subject=${konu}&body=${govde}`, '_blank');
-  }
-}
-
-async function yoneticiSifirla() {
-  const secim = prompt('Ne sıfırlansın? Yazın:\n1 = Tüm sevkiyatları sil\n2 = Tüm müşterileri sil\n3 = Hepsini sil');
-  if (!secim) return;
-  if (!confirm('⚠ Bu işlem geri alınamaz! Emin misiniz?')) return;
-  try {
-    if (secim === '1' || secim === '3') {
-      const snap = await db.collection('sevkiyatlar').get();
-      for (const doc of snap.docs) {
-        if ((doc.data().fotoSayisi || 0) > 0) {
-          const fotoSnap = await doc.ref.collection('fotograflar').get();
-          if (!fotoSnap.empty) {
-            const fb = db.batch(); fotoSnap.docs.forEach(f => fb.delete(f.ref)); await fb.commit();
-          }
-        }
-      }
-      const batch = db.batch();
-      snap.docs.forEach(d => batch.delete(d.ref));
-      await batch.commit();
-      state.yoneticiSevkiyatlar = [];
-      state.sevkiyatlar = [];
-      toast('✓ Tüm sevkiyatlar silindi');
-    }
-    if (secim === '2' || secim === '3') {
-      const snap = await db.collection('musteriler').get();
-      const batch = db.batch();
-      snap.docs.forEach(d => batch.delete(d.ref));
-      await batch.commit();
-      state.musteriler = [];
-      toast('✓ Tüm müşteriler silindi');
-    }
-    render();
-  } catch(e) { toast('❌ Hata: ' + e.message, 3000); }
 }
 
 // ====== YÖNETİCİ KONTROL + FOTOĞRAF ======
@@ -2800,146 +2743,118 @@ async function exifDuzelt(dataUrl) {
   });
 }
 
-// Grup kartına basınca o grubun tüm paket fotoğraflarını göster
-async function grupFotoGoster(fsId, indices) {
-  const mbg = document.createElement('div');
-  mbg.className = 'modal-bg';
-  mbg.innerHTML = `<div class="modal" onclick="event.stopPropagation()" style="max-width:95vw;padding:16px">
-    <div class="modal-handle"></div>
-    <div style="text-align:center;padding:20px;color:var(--ink-faint)">📷 Yükleniyor...</div>
-  </div>`;
-  mbg.onclick = () => mbg.remove();
-  document.body.appendChild(mbg);
-  const modalEl = mbg.querySelector('.modal');
-  try {
-    const snap = await db.collection('sevkiyatlar').doc(fsId)
-      .collection('fotograflar').orderBy('sira').get();
-    const tumDocs = snap.docs;
-    // indices listesinde olan sira değerlerine sahip fotoğrafları al
-    const seciliDocs = tumDocs.filter(d => indices.includes(d.data().sira ?? tumDocs.indexOf(d)));
-    const kaynakDocs = seciliDocs.length > 0 ? seciliDocs : tumDocs.filter((_,i) => indices.includes(i));
-    if (kaynakDocs.length === 0) {
-      modalEl.innerHTML = `<div class="modal-handle"></div>
-        <div style="text-align:center;padding:20px;color:var(--ink-faint)">Bu grup için fotoğraf bulunamadı</div>
-        <button class="btn secondary" onclick="document.querySelector('.modal-bg').remove()">Kapat</button>`;
-      return;
-    }
-    const fotolar = await Promise.all(kaynakDocs.map(d => exifDuzelt(d.data().foto)));
-    let aktif = 0;
-    const galeriGuncelle = () => {
-      const imgEl = modalEl.querySelector('img');
-      const sayiEl = modalEl.querySelector('.galeri-sayi');
-      const oncekiBtn = modalEl.querySelector('.galeri-onceki');
-      const sonrakiBtn = modalEl.querySelector('.galeri-sonraki');
-      if (imgEl) imgEl.src = fotolar[aktif];
-      if (sayiEl) sayiEl.textContent = `${aktif+1} / ${fotolar.length} paket`;
-      if (oncekiBtn) oncekiBtn.disabled = aktif === 0;
-      if (sonrakiBtn) sonrakiBtn.disabled = aktif === fotolar.length - 1;
+// Bir sevkiyatın fotoğraflarını {deriIndex, foto} olarak getirir (geriye dönük uyumlu)
+async function sevkiyatFotograflariGetir(fsId) {
+  const snap = await db.collection('sevkiyatlar').doc(fsId)
+    .collection('fotograflar').orderBy('sira').get();
+  return snap.docs.map((d, i) => {
+    const data = d.data();
+    return {
+      // Eski kayıtlarda deriIndex yok → sira'ya (ya da konuma) düş
+      deriIndex: (typeof data.deriIndex === 'number') ? data.deriIndex : (data.sira ?? i),
+      foto: data.foto
     };
-    modalEl.innerHTML = `<div class="modal-handle"></div>
-      <div class="galeri-sayi" style="font-size:12px;color:var(--ink-faint);text-align:center;margin-bottom:8px">1 / ${fotolar.length} paket</div>
-      <img src="${fotolar[0]}" style="width:100%;border-radius:8px;max-height:70vh;object-fit:contain;display:block">
-      <div style="display:flex;gap:8px;margin-top:12px">
-        <button class="btn secondary galeri-onceki" style="flex:1" disabled>◀</button>
-        <button class="btn secondary galeri-sonraki" style="flex:1" ${fotolar.length === 1 ? 'disabled' : ''}>▶</button>
-        <button class="btn secondary" style="flex:1" onclick="document.querySelector('.modal-bg').remove()">Kapat</button>
-      </div>`;
-    modalEl.querySelector('.galeri-onceki').onclick = () => { if (aktif > 0) { aktif--; galeriGuncelle(); } };
-    modalEl.querySelector('.galeri-sonraki').onclick = () => { if (aktif < fotolar.length-1) { aktif++; galeriGuncelle(); } };
-  } catch(e) {
-    modalEl.innerHTML = `<div class="modal-handle"></div>
-      <div style="color:var(--red);padding:16px">Fotoğraf yüklenemedi: ${escapeHtml(e.message)}</div>
-      <button class="btn secondary" onclick="document.querySelector('.modal-bg').remove()">Kapat</button>`;
-  }
+  });
 }
 
-async function paketFotoGoster(fsId, paketIndex) {
-  // O pakete ait fotoğrafı yükle ve modal'da göster
-  // Fotoğraflar sira alanına göre sıralı; paketIndex'e karşılık gelen sira değeri
+// Ortak yükleniyor / boş / hata modalları
+function fotoModalAc() {
   const mbg = document.createElement('div');
   mbg.className = 'modal-bg';
-  mbg.innerHTML = `<div class="modal" onclick="event.stopPropagation()" style="max-width:95vw;padding:16px">
-    <div class="modal-handle"></div>
-    <div style="text-align:center;padding:20px;color:var(--ink-faint)">📷 Yükleniyor...</div>
-  </div>`;
+  mbg.innerHTML = `<div class="modal" onclick="event.stopPropagation()" style="max-width:95vw;padding:16px"><div class="modal-handle"></div><div style="text-align:center;padding:20px;color:var(--ink-faint)">📷 Yükleniyor...</div></div>`;
   mbg.onclick = () => mbg.remove();
   document.body.appendChild(mbg);
-  const modalEl = mbg.querySelector('.modal');
-
-  try {
-    const snap = await db.collection('sevkiyatlar').doc(fsId)
-      .collection('fotograflar').orderBy('sira').get();
-    if (snap.empty) {
-      modalEl.innerHTML = `<div class="modal-handle"></div>
-        <div style="text-align:center;padding:20px;color:var(--ink-faint)">Bu paket için fotoğraf bulunamadı</div>
-        <button class="btn secondary" onclick="document.querySelector('.modal-bg').remove()">Kapat</button>`;
-      return;
-    }
-
-    // Önce bu pakete ait fotoğrafı bulmaya çalış, yoksa hepsini göster
-    const docs = snap.docs;
-    const hedefDoc = docs[paketIndex] || docs[0];
-    const foto = await exifDuzelt(hedefDoc.data().foto);
-
-    // Eğer birden fazla fotoğraf varsa galeri göster
-    if (docs.length > 1) {
-      let aktif = paketIndex < docs.length ? paketIndex : 0;
-      const fotolar = await Promise.all(docs.map(d => exifDuzelt(d.data().foto)));
-
-      const galeriGoster = (idx) => {
-        aktif = idx;
-        const imgEl = modalEl.querySelector('img');
-        const sayiEl = modalEl.querySelector('.galeri-sayi');
-        const oncekiBtn = modalEl.querySelector('.galeri-onceki');
-        const sonrakiBtn = modalEl.querySelector('.galeri-sonraki');
-        if (imgEl) imgEl.src = fotolar[aktif];
-        if (sayiEl) sayiEl.textContent = `Paket ${aktif+1} / ${fotolar.length}`;
-        if (oncekiBtn) oncekiBtn.disabled = aktif === 0;
-        if (sonrakiBtn) sonrakiBtn.disabled = aktif === fotolar.length - 1;
-      };
-
-      modalEl.innerHTML = `<div class="modal-handle"></div>
-        <div class="galeri-sayi" style="font-size:12px;color:var(--ink-faint);text-align:center;margin-bottom:8px">Paket ${aktif+1} / ${fotolar.length}</div>
-        <img src="${fotolar[aktif]}" style="width:100%;border-radius:8px;max-height:70vh;object-fit:contain;display:block">
-        <div style="display:flex;gap:8px;margin-top:12px">
-          <button class="btn secondary galeri-onceki" style="flex:1" ${aktif===0?'disabled':''}>◀</button>
-          <button class="btn secondary galeri-sonraki" style="flex:1" ${aktif===fotolar.length-1?'disabled':''}>▶</button>
-          <button class="btn secondary" style="flex:1" onclick="document.querySelector('.modal-bg').remove()">Kapat</button>
-        </div>`;
-      modalEl.querySelector('.galeri-onceki').onclick = () => { if (aktif > 0) galeriGoster(aktif - 1); };
-      modalEl.querySelector('.galeri-sonraki').onclick = () => { if (aktif < fotolar.length - 1) galeriGoster(aktif + 1); };
-    } else {
-      modalEl.innerHTML = `<div class="modal-handle"></div>
-        <img src="${foto}" style="width:100%;border-radius:8px;max-height:75vh;object-fit:contain;display:block">
-        <button class="btn secondary mt-2" onclick="document.querySelector('.modal-bg').remove()">Kapat</button>`;
-    }
-  } catch(e) {
-    modalEl.innerHTML = `<div class="modal-handle"></div>
-      <div style="color:var(--red);padding:16px">Fotoğraf yüklenemedi: ${escapeHtml(e.message)}</div>
-      <button class="btn secondary" onclick="document.querySelector('.modal-bg').remove()">Kapat</button>`;
-  }
+  return mbg;
+}
+function fotoModalMesaj(mbg, html, renk) {
+  mbg.innerHTML = `<div class="modal" onclick="event.stopPropagation()" style="padding:16px"><div class="modal-handle"></div><div style="text-align:center;padding:16px;color:${renk||'var(--ink-faint)'}">${html}</div><button class="btn secondary" onclick="document.querySelector('.modal-bg').remove()">Kapat</button></div>`;
 }
 
-// ====== FOTOĞRAF KOTA YÖNETİMİ (zaman limiti yok, kota dolunca eskiyi sil) ======
-async function eskiFotograflariTemizle() {
-  // 10 günlük limit kaldırıldı — kapasite dolunca en eski fotoğraflar silinir
-  // Bu fonksiyon çağrıldığında sadece fotoğrafı olan en eski 20 kaydı temizler
-  // Firestore'un kota uyarısını engellemek için manuel tetiklenebilir
+// Galeri içeriğini mbg içine doldurur (ileri/geri navigasyon)
+function galeriDoldur(mbg, fotolar, baslangic, etiketBasi) {
+  let aktif = Math.min(Math.max(0, baslangic || 0), fotolar.length - 1);
+  const render = () => {
+    mbg.innerHTML = `<div class="modal" onclick="event.stopPropagation()" style="max-width:95vw;padding:16px">
+      <div class="modal-handle"></div>
+      <div style="font-size:13px;font-weight:700;text-align:center;margin-bottom:8px">${etiketBasi} ${aktif+1} / ${fotolar.length}</div>
+      <img src="${fotolar[aktif]}" style="width:100%;border-radius:8px;max-height:70vh;object-fit:contain;display:block">
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn secondary g-onceki" style="flex:1" ${aktif===0?'disabled':''}>◀</button>
+        <button class="btn secondary g-sonraki" style="flex:1" ${aktif===fotolar.length-1?'disabled':''}>▶</button>
+        <button class="btn secondary" style="flex:1" onclick="document.querySelector('.modal-bg').remove()">Kapat</button>
+      </div></div>`;
+    mbg.querySelector('.g-onceki').onclick = () => { if (aktif > 0) { aktif--; render(); } };
+    mbg.querySelector('.g-sonraki').onclick = () => { if (aktif < fotolar.length-1) { aktif++; render(); } };
+  };
+  render();
+}
+
+// Grup kartına basınca o grubun paket fotoğraflarını göster
+async function grupFotoGoster(fsId, indices) {
+  const mbg = fotoModalAc();
   try {
+    const tum = await sevkiyatFotograflariGetir(fsId);
+    let secili = tum.filter(p => indices.includes(p.deriIndex));
+    if (secili.length === 0) secili = tum; // eşleşme yoksa (eski kayıt) hepsini göster
+    if (secili.length === 0) { fotoModalMesaj(mbg, 'Bu grup için fotoğraf bulunamadı'); return; }
+    const fotolar = await Promise.all(secili.map(p => exifDuzelt(p.foto)));
+    galeriDoldur(mbg, fotolar, 0, 'Paket');
+  } catch(e) { fotoModalMesaj(mbg, 'Fotoğraf yüklenemedi: ' + escapeHtml(e.message), 'var(--red)'); }
+}
+
+// Tek bir paketin (deri index) fotoğrafını galeri içinde aç
+async function paketFotoGoster(fsId, deriIndex) {
+  const mbg = fotoModalAc();
+  try {
+    const tum = await sevkiyatFotograflariGetir(fsId);
+    if (tum.length === 0) { fotoModalMesaj(mbg, 'Bu paket için fotoğraf bulunamadı'); return; }
+    const fotolar = await Promise.all(tum.map(p => exifDuzelt(p.foto)));
+    let baslangic = tum.findIndex(p => p.deriIndex === deriIndex);
+    if (baslangic < 0) baslangic = Math.min(deriIndex, tum.length - 1);
+    galeriDoldur(mbg, fotolar, baslangic, 'Paket');
+  } catch(e) { fotoModalMesaj(mbg, 'Fotoğraf yüklenemedi: ' + escapeHtml(e.message), 'var(--red)'); }
+}
+
+// ====== FOTOĞRAF KOTA YÖNETİMİ — limit aşılınca en eski fotoğrafları sil ======
+async function eskiFotograflariTemizle() {
+  try {
+    const fsPlan = await Storage.get('app:firestorePlan') || 'spark';
+    const limitMB = fsPlan === 'blaze' ? 4096 : 1000;
+    const limitKB = limitMB * 1024;
+
+    // Tahmini kullanımı hesapla
+    const sevk = state.yoneticiSevkiyatlar || state.sevkiyatlar || [];
+    const tahminiKB = sevk.length * 3;
+    const fotoSayisi = sevk.reduce((s, x) => s + (x.fotoSayisi || 0), 0);
+    const fotoKB = fotoSayisi * 53;
+    const toplamKB = tahminiKB + fotoKB;
+
+    // Limit aşılmadıysa silme
+    if (toplamKB < limitKB) return;
+
+    // En eski fotoğraflı sevkiyatlardan başlayarak sil (her seferde 10)
     const snap = await db.collection('sevkiyatlar')
       .where('fotoSayisi', '>', 0)
       .orderBy('fotoSayisi').orderBy('tarih', 'asc')
-      .limit(20).get();
+      .limit(10).get();
     if (snap.empty) return;
+
+    let silinenKB = 0;
     for (const doc of snap.docs) {
+      if (toplamKB - silinenKB < limitKB) break;
       const fotoSnap = await doc.ref.collection('fotograflar').get();
       if (fotoSnap.empty) continue;
       const batch = db.batch();
       fotoSnap.docs.forEach(f => batch.delete(f.ref));
       batch.update(doc.ref, { fotoSayisi: 0 });
       await batch.commit();
+      silinenKB += fotoSnap.size * 53;
+      // State'i de güncelle
+      const stateItem = sevk.find(s => s.fsId === doc.id);
+      if (stateItem) stateItem.fotoSayisi = 0;
     }
-  } catch(e) { /* sessizce geç */ }
+    if (silinenKB > 0) console.log(`Kota temizliği: ${(silinenKB/1024).toFixed(1)} MB fotoğraf silindi`);
+  } catch(e) { console.warn('Kota temizliği hatası:', e.message); }
 }
 
 async function sevkiyatSil(fsId) {
@@ -3129,7 +3044,7 @@ function ekranYonetici() {
 
   return `
     <div class="topbar">
-      <div class="brand" style="font-size:15px">👑 ${state.profil?.ad || kullaniciAdiGoster(state.kullanici?.email)}</div>
+      <div class="brand" style="font-size:15px">👑 ${escapeHtml(state.profil?.ad || kullaniciAdiGoster(state.kullanici?.email))}</div>
       <div style="display:flex;gap:6px">
         <button onclick="ekranGit('musteri-listesi')" style="font-size:12px;padding:6px 10px;background:var(--gold);color:var(--leather-dark);border-radius:8px;font-weight:700">+ Sevkiyat</button>
         <button onclick="ayarlarDialog()">⚙</button>
@@ -3154,9 +3069,9 @@ function sevkiyatKarti(s) {
       <span class="no">${s.sevkiyatNo}</span>
       <span class="date">${tarihFormatla(s.tarih)}</span>
     </div>
-    <div class="customer">${s.musteriAd}</div>
+    <div class="customer">${escapeHtml(s.musteriAd||'')}</div>
     <div class="totals">
-      <span>👤 ${s.personelAd||'?'}</span>
+      <span>👤 ${escapeHtml(s.personelAd||'?')}</span>
       <span>🐂 ${s.toplamAdet} deri</span>
       <span>📐 ${(s.toplamYuzeyDm2||0).toFixed(0)} dm²</span>
     </div>
@@ -3173,8 +3088,8 @@ function sevkiyatKartiOnay(s) {
       <span style="font-size:12px;color:var(--ink-faint);margin-left:auto">${tarihFormatla(s.tarih)}</span>
     </div>
     <div style="flex:1">
-      <div style="font-weight:700;font-size:15px">${s.musteriAd}</div>
-      <div style="font-size:12px;color:var(--ink-soft)">${s.sevkiyatNo} · 👤 ${s.personelAd||'?'}</div>
+      <div style="font-weight:700;font-size:15px">${escapeHtml(s.musteriAd||'')}</div>
+      <div style="font-size:12px;color:var(--ink-soft)">${escapeHtml(s.sevkiyatNo||'')} · 👤 ${escapeHtml(s.personelAd||'?')}</div>
       <div style="display:flex;gap:14px;margin-top:8px;align-items:baseline">
         <span style="font-size:20px;font-weight:800;color:var(--leather-dark)">${paketSayisi} <span style="font-size:13px;font-weight:600">paket</span></span>
         <span style="font-size:20px;font-weight:800;color:var(--leather-dark)">${sayiFormatla(s.toplamYuzeyDm2||0)} <span style="font-size:13px;font-weight:600">dm²</span></span>
@@ -3276,7 +3191,14 @@ function yoneticiDinlemeBaslat() {
     .limit(500)
     .onSnapshot(snap => {
       state.yoneticiSevkiyatlar = snap.docs.map(d => ({ ...d.data(), fsId: d.id }));
-      if (state.ekran === 'yonetici') render();
+      // Yenileme sonrası açık olan detay ekranını geri yükle
+      if (state._bekleyenDetayId && !state.aktifSevkiyatDetay) {
+        const detay = state.yoneticiSevkiyatlar.find(s => s.fsId === state._bekleyenDetayId);
+        if (detay) { state.aktifSevkiyatDetay = detay; state._bekleyenDetayId = null; }
+      }
+      // Veri geldikten sonra kota temizliğini bir kez çalıştır
+      if (!state._kotaKontrolEdildi) { state._kotaKontrolEdildi = true; eskiFotograflariTemizle(); }
+      if (state.ekran === 'yonetici' || state.ekran === 'sevkiyat-detay') render();
     }, e => console.warn('Snapshot:', e.message));
 }
 
@@ -3421,8 +3343,7 @@ async function basla() {
 
     if (profil.rol === 'YONETICI') {
       state.ekran = 'yonetici';
-      yoneticiDinlemeBaslat();
-      eskiFotograflariTemizle();
+      yoneticiDinlemeBaslat(); // kota temizliği snapshot verisi gelince çalışır
     } else {
       state.ekran = 'musteri-listesi';
       try {
@@ -3450,6 +3371,8 @@ async function basla() {
         const detay = (state.sevkiyatlar || []).find(s => s.fsId === kayitli.aktifSevkiyatDetayId)
           || (state.yoneticiSevkiyatlar || []).find(s => s.fsId === kayitli.aktifSevkiyatDetayId);
         if (detay) state.aktifSevkiyatDetay = detay;
+        // Yönetici snapshot'ı henüz gelmediyse, detay snapshot callback'te çözülür
+        else state._bekleyenDetayId = kayitli.aktifSevkiyatDetayId;
       }
       if (kayitli.ekranGecmisi) state.ekranGecmisi = kayitli.ekranGecmisi;
       // Giriş/ilk-kurulum hariç kayıtlı ekrana dön
@@ -3522,14 +3445,14 @@ async function ilkKurulumKaydet() {
   hataEl.style.display='none';
 
   try {
-    const profil = { ad, email: state.kullanici.email, rol, aktif: true, olusturma: Date.now() };
+    // İlk kurulan yönetici otomatik onay yetkisi alır (tek admin senaryosu)
+    const profil = { ad, email: state.kullanici.email, rol, aktif: true, onayYetkisi: rol === 'YONETICI', olusturma: Date.now() };
     await db.collection('users').doc(state.kullanici.uid).set(profil);
     state.profil = profil;
     await musterileriYukle();
     if (rol === 'YONETICI') {
       state.ekran = 'yonetici';
       yoneticiDinlemeBaslat();
-      eskiFotograflariTemizle(); // 10 günden eski fotoğrafları sil
     } else {
       state.ekran = 'musteri-listesi';
     }
