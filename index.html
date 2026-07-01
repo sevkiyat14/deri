@@ -1819,20 +1819,9 @@ async function ogrenilmistenIyilestir(veri) {
     return veri;
   }
 
-  // Kod okunamadı ama cins biliniyor → ters eşleşme dene
-  const cinsOku = (veri.cins.deger || '').toUpperCase().trim();
-  if (cinsOku) {
-    const eslesen = Object.entries(harita)
-      .filter(([_, b]) => b.cins && (b.cins.includes(cinsOku) || cinsOku.includes(b.cins)))
-      .sort((a, b) => b[1].sayim - a[1].sayim); // En çok görüleni önce
-
-    if (eslesen.length === 1) {
-      // Tek eşleşme → güvenle doldur
-      veri.kod.deger = eslesen[0][0];
-      veri.kod.guven = 0.82;
-    }
-  }
-
+  // NOT: Kod'u cins'ten ters doldurma KALDIRILDI.
+  // Bu, okunamayan kodları öğrenilmiş tek bir koda (örn. 4130) eşitleyip
+  // farklı ürünleri tek grupta topluyordu. Kod yalnızca gerçek okumadan gelir.
   return veri;
 }
 
@@ -2418,9 +2407,11 @@ function pdfIcerikDoldur(pdf, s, boyut) {
   // ---- Aynı sınıf + aynı kod grupları ----
   const gruplar = derilerGrupla(s.deriler || []);
   let toplamAdet = 0, toplamDm2 = 0, toplamFt2 = 0;
-  const kolonSayisi = 3;                       // ölçüleri 3 kolona böl — sayfaya çok daha fazla sığar
-  const kolonW = (W - 2 * margin) / kolonSayisi;
-  const satirYuk = 4.4;
+  // Her paketin dm² değeri ayrı kutu içinde — çok kolonlu, sayfaya çok sığar
+  const kutuKolon = 5;
+  const kutuBosluk = 2;
+  const kutuW = (W - 2 * margin - (kutuKolon - 1) * kutuBosluk) / kutuKolon;
+  const kutuH = 6;
 
   gruplar.forEach(g => {
     toplamAdet += g.toplamAdet; toplamDm2 += g.toplamDm2; toplamFt2 += g.toplamFt2;
@@ -2438,22 +2429,22 @@ function pdfIcerikDoldur(pdf, s, boyut) {
              W - margin - 2, y, { align: 'right' });
     y += 7;
 
-    // Her paketin ölçüsü — çok kolonlu liste
-    const olcumler = g.fisler.map(f => {
-      const dm2 = typeof f.toplamYuzeyDm2 === 'number' ? f.toplamYuzeyDm2 : (f.toplamYuzeyDm2?.deger || 0);
-      const seri = typeof f.seriNo === 'string' ? f.seriNo : (f.seriNo?.deger || '');
-      return `${seri ? seri + ' ' : ''}${dm2.toFixed(1)} dm2`;
-    });
+    // Her paketin dm² değeri ayrı kutu içinde (seri no yok)
+    const dm2ler = g.fisler.map(f =>
+      typeof f.toplamYuzeyDm2 === 'number' ? f.toplamYuzeyDm2 : (f.toplamYuzeyDm2?.deger || 0));
     pdf.setFont('helvetica', 'normal');
     pdf.setFontSize(8);
-    for (let i = 0; i < olcumler.length; i += kolonSayisi) {
-      yerAyir(satirYuk);
-      for (let k = 0; k < kolonSayisi; k++) {
+    pdf.setDrawColor(160, 160, 160);
+    for (let i = 0; i < dm2ler.length; i += kutuKolon) {
+      yerAyir(kutuH + 2);
+      for (let k = 0; k < kutuKolon; k++) {
         const idx = i + k;
-        if (idx >= olcumler.length) break;
-        pdf.text(`${idx + 1}. ${olcumler[idx]}`, margin + 2 + k * kolonW, y);
+        if (idx >= dm2ler.length) break;
+        const bx = margin + k * (kutuW + kutuBosluk);
+        pdf.rect(bx, y - 4, kutuW, kutuH);
+        pdf.text(dm2ler[idx].toFixed(1), bx + kutuW / 2, y, { align: 'center' });
       }
-      y += satirYuk;
+      y += kutuH + 1.5;
     }
     y += 3;
   });
