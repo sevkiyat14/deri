@@ -1626,7 +1626,8 @@ async function yeniMusteriKaydet() {
 async function musteriSec(id) {
   state.aktifMusteri = state.musteriler.find(m => m.id === id);
   state.aktifFisler = [];
-  state.oturumNo = await uretSevkiyatNo();
+  // Sevkiyat numarası kayıt anında üretilir — boş/atlanan numara oluşmasın
+  state.oturumNo = null;
   ekranGit('toplu-cekim');
 }
 
@@ -1680,7 +1681,7 @@ function ekranTopluCekim() {
   return `
     <div class="topbar">
       <button onclick="oturumIptal()" style="font-size:13px">‹ Vazgeç</button>
-      <div class="brand mono" style="font-size:14px">${state.oturumNo}</div>
+      <div class="brand mono" style="font-size:14px">${state.oturumNo || 'Yeni Sevkiyat'}</div>
       ${ist.hazir > 0 ? `<button onclick="incelemeyeGec()" style="background:var(--green);color:#fff;font-weight:700;padding:8px 16px;border-radius:8px;font-size:14px">✕ Kayıt (${ist.hazir})</button>` : '<div style="width:60px"></div>'}
     </div>
     <div class="customer-bar">
@@ -1721,25 +1722,9 @@ async function fisCekildi(dosya) {
   if (!dosya) return;
   titret(50);
   const fotoData = await dosyayiBase64(dosya);
-
-  // Hızlı netlik kontrolü — sadece fotoğrafı göster
-  const mbg = document.createElement('div');
-  mbg.className = 'modal-bg';
-  mbg.innerHTML = `
-    <div class="modal" onclick="event.stopPropagation()" style="padding:12px">
-      <div class="modal-handle"></div>
-      <div style="font-weight:700;font-size:16px;text-align:center;margin-bottom:10px">Fotoğraf net mi?</div>
-      <img src="${fotoData}" style="width:100%;border-radius:10px;max-height:50vh;object-fit:contain">
-      <div style="display:flex;gap:8px;margin-top:12px">
-        <button class="btn danger" style="flex:1" onclick="fotoTekrarCek()">✗ Tekrar Çek</button>
-        <button class="btn green" style="flex:2;font-size:16px" onclick="fotoOnayla()">✓ Net — Devam</button>
-      </div>
-    </div>`;
-  mbg.onclick = () => mbg.remove();
-  document.body.appendChild(mbg);
-
-  // Geçici olarak fotoyu sakla
+  // Netlik sorusu yok — kamera zaten çekim onayı istiyor. Direkt kuyruğa al.
   state._bekleyenFoto = fotoData;
+  fotoOnayla();
 }
 
 function fotoTekrarCek() {
@@ -2149,7 +2134,7 @@ function grupKartiHtml(g, ctx) {
       </div>
       <div style="display:flex;gap:16px;margin-top:10px;padding-top:8px;border-top:1px solid var(--line);font-size:14px">
         <span><b>${g.toplamAdet}</b> <span style="font-size:11px;color:var(--ink-soft)">adet</span></span>
-        <span><b>${g.toplamDm2.toFixed(0)}</b> <span style="font-size:11px;color:var(--ink-soft)">dm²</span></span>
+        <span><b>${sayiFormatla(g.toplamDm2)}</b> <span style="font-size:11px;color:var(--ink-soft)">dm²</span></span>
         <span style="color:var(--ink-faint)">${g.toplamFt2.toFixed(2)} ft²</span>
       </div>
     </div>`;
@@ -2188,7 +2173,7 @@ function ekranInceleme() {
   return `
     <div class="topbar">
       <button onclick="geriDon();" style="font-size:13px">‹ Geri</button>
-      <div class="brand mono" style="font-size:14px">${state.oturumNo}</div>
+      <div class="brand mono" style="font-size:14px">${state.oturumNo || 'Yeni Sevkiyat'}</div>
       <div style="width:80px"></div>
     </div>
     <div class="content">
@@ -2206,8 +2191,8 @@ function ekranInceleme() {
         </div>
         ${ecoGruplar.length > 0 ? `
         <div style="display:flex;gap:12px;margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.1);font-size:12px">
-          <span>Standart: <b>${stdDm2.toFixed(0)}</b> dm²</span>
-          <span style="color:var(--amber)">ECO: <b>${ecoDm2.toFixed(0)}</b> dm²</span>
+          <span>Standart: <b>${sayiFormatla(stdDm2)}</b> dm²</span>
+          <span style="color:var(--amber)">ECO: <b>${sayiFormatla(ecoDm2)}</b> dm²</span>
         </div>` : ''}
       </div>
 
@@ -2260,6 +2245,9 @@ async function sevkiyatKaydet() {
     // Giriş kontrolü
     const uid = state.kullanici?.uid;
     if (!uid) throw new Error('Oturum açık değil — lütfen tekrar giriş yapın');
+
+    // Sevkiyat numarasını tam kayıt anında üret (boş numara oluşmasın)
+    if (!state.oturumNo) state.oturumNo = await uretSevkiyatNo();
 
     const musteriiBirim = m.tercihBirim || 'dm2';
     const toplamAdet = onayli.reduce((s, f) => s + (f.veri?.deriAdedi?.deger || 0), 0);
@@ -2367,7 +2355,7 @@ function basariDialog(s) {
 async function devamEt() {
   document.querySelector('.modal-bg')?.remove();
   state.aktifFisler = [];
-  state.oturumNo = await uretSevkiyatNo();
+  state.oturumNo = null;
   ekranGit('toplu-cekim');
 }
 
@@ -2393,8 +2381,15 @@ function pdfOlustur(s, boyut) {
 
 function pdfIcerikDoldur(pdf, s, boyut) {
   const W = pdf.internal.pageSize.getWidth();
+  const H = pdf.internal.pageSize.getHeight();
   const margin = 12;
+  const altSinir = H - margin;
   let y = margin;
+
+  function yeniSayfa() { pdf.addPage(); y = margin; }
+  function yerAyir(h) { if (y + h > altSinir) yeniSayfa(); }
+
+  // ---- Başlık ----
   pdf.setFont('helvetica', 'bold');
   pdf.setFontSize(boyut === 'A4' ? 16 : 13);
   pdf.text('DERI SEVKIYAT IRSALIYESI', W/2, y, { align: 'center' });
@@ -2404,14 +2399,14 @@ function pdfIcerikDoldur(pdf, s, boyut) {
   y += 6;
   pdf.setFontSize(9);
   pdf.setFont('helvetica', 'bold'); pdf.text('Sevkiyat No:', margin, y);
-  pdf.setFont('helvetica', 'normal'); pdf.text(s.sevkiyatNo, margin + 22, y);
+  pdf.setFont('helvetica', 'normal'); pdf.text(String(s.sevkiyatNo || ''), margin + 22, y);
   pdf.setFont('helvetica', 'bold'); pdf.text('Tarih:', W - margin - 40, y);
   pdf.setFont('helvetica', 'normal'); pdf.text(tarihFormatla(s.tarih), W - margin - 28, y);
   y += 5;
   pdf.setFont('helvetica', 'bold'); pdf.text('Musteri:', margin, y);
-  pdf.setFont('helvetica', 'normal'); pdf.text(s.musteriAd, margin + 22, y);
+  pdf.setFont('helvetica', 'normal'); pdf.text(String(s.musteriAd || ''), margin + 22, y);
   pdf.setFont('helvetica', 'bold'); pdf.text('Kod:', W - margin - 40, y);
-  pdf.setFont('helvetica', 'normal'); pdf.text(s.musteriKod, W - margin - 28, y);
+  pdf.setFont('helvetica', 'normal'); pdf.text(String(s.musteriKod || ''), W - margin - 28, y);
   y += 5;
   if (s.not) {
     pdf.setFont('helvetica', 'italic');
@@ -2419,41 +2414,63 @@ function pdfIcerikDoldur(pdf, s, boyut) {
     y += 5;
   }
   y += 3;
-  const colW = boyut === 'A4' ? [28, 22, 22, 16, 14, 22, 22, 30] : [22, 17, 17, 12, 11, 17, 17, 22];
-  const basliklar = ['Cins', 'Renk', 'Kod', 'Kalite', 'Adet', 'dm2', 'ft2', 'Seri No'];
-  pdf.setFillColor(220, 220, 220);
-  pdf.rect(margin, y - 4, W - 2*margin, 6, 'F');
-  pdf.setFont('helvetica', 'bold');
-  pdf.setFontSize(8);
-  let x = margin + 2;
-  basliklar.forEach((b, i) => { pdf.text(b, x, y); x += colW[i]; });
-  y += 4;
-  pdf.line(margin, y, W - margin, y);
-  y += 4;
-  pdf.setFont('helvetica', 'normal');
-  let toplamAdet = 0, toplamFt2 = 0, toplamDm2 = 0;
-  s.deriler.forEach(d => {
-    const ft2 = d.toplamYuzeyFt2 || 0;
-    const dm2 = d.toplamYuzeyDm2 || ft2 * 9.2903;
-    toplamAdet += d.deriAdedi; toplamFt2 += ft2; toplamDm2 += dm2;
-    x = margin + 2;
-    [d.cins || '', d.renk || '', d.kod || '', d.kalite || '', String(d.deriAdedi || 0), dm2.toFixed(1), ft2.toFixed(2), d.seriNo || ''].forEach((v, i) => {
-      pdf.text(String(v).substring(0, i === 0 ? 12 : 10), x, y);
-      x += colW[i];
+
+  // ---- Aynı sınıf + aynı kod grupları ----
+  const gruplar = derilerGrupla(s.deriler || []);
+  let toplamAdet = 0, toplamDm2 = 0, toplamFt2 = 0;
+  const kolonSayisi = 3;                       // ölçüleri 3 kolona böl — sayfaya çok daha fazla sığar
+  const kolonW = (W - 2 * margin) / kolonSayisi;
+  const satirYuk = 4.4;
+
+  gruplar.forEach(g => {
+    toplamAdet += g.toplamAdet; toplamDm2 += g.toplamDm2; toplamFt2 += g.toplamFt2;
+
+    // Grup başlığı
+    yerAyir(9);
+    pdf.setFillColor(228, 222, 208);
+    pdf.rect(margin, y - 4, W - 2 * margin, 6, 'F');
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(9);
+    const kaliteStr = [...g.kaliteler].join(', ');
+    const baslik = `${g.kod} · ${g.cins} · ${g.renk}${g.ecoGrup ? ' (ECO)' : ''} · ${kaliteStr}`;
+    pdf.text(baslik.substring(0, 55), margin + 2, y);
+    pdf.text(`${g.fisler.length} paket · ${g.toplamAdet} adet · ${g.toplamDm2.toFixed(0)} dm2`,
+             W - margin - 2, y, { align: 'right' });
+    y += 7;
+
+    // Her paketin ölçüsü — çok kolonlu liste
+    const olcumler = g.fisler.map(f => {
+      const dm2 = typeof f.toplamYuzeyDm2 === 'number' ? f.toplamYuzeyDm2 : (f.toplamYuzeyDm2?.deger || 0);
+      const seri = typeof f.seriNo === 'string' ? f.seriNo : (f.seriNo?.deger || '');
+      return `${seri ? seri + ' ' : ''}${dm2.toFixed(1)} dm2`;
     });
-    y += 5;
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(8);
+    for (let i = 0; i < olcumler.length; i += kolonSayisi) {
+      yerAyir(satirYuk);
+      for (let k = 0; k < kolonSayisi; k++) {
+        const idx = i + k;
+        if (idx >= olcumler.length) break;
+        pdf.text(`${idx + 1}. ${olcumler[idx]}`, margin + 2 + k * kolonW, y);
+      }
+      y += satirYuk;
+    }
+    y += 3;
   });
-  pdf.line(margin, y - 2, W - margin, y - 2);
-  y += 2;
+
+  // ---- Genel toplam ----
+  yerAyir(9);
   pdf.setFillColor(245, 230, 200);
-  pdf.rect(margin, y - 4, W - 2*margin, 6, 'F');
+  pdf.rect(margin, y - 4, W - 2 * margin, 6, 'F');
   pdf.setFont('helvetica', 'bold');
-  x = margin + 2;
-  pdf.text('TOPLAM', x + colW[0] + colW[1] + colW[2] - 10, y);
-  pdf.text(String(toplamAdet), x + colW[0] + colW[1] + colW[2] + colW[3], y);
-  pdf.text(toplamDm2.toFixed(1), x + colW[0] + colW[1] + colW[2] + colW[3] + colW[4], y);
-  pdf.text(toplamFt2.toFixed(2), x + colW[0] + colW[1] + colW[2] + colW[3] + colW[4] + colW[5], y);
+  pdf.setFontSize(9);
+  pdf.text('GENEL TOPLAM', margin + 2, y);
+  pdf.text(`${toplamAdet} adet · ${toplamDm2.toFixed(0)} dm2 · ${toplamFt2.toFixed(2)} ft2`,
+           W - margin - 2, y, { align: 'right' });
   y += 14;
+
+  // ---- İmza ----
+  yerAyir(18);
   pdf.setFont('helvetica', 'normal');
   pdf.setFontSize(9);
   pdf.text('Teslim Eden:', margin, y);
@@ -2482,20 +2499,54 @@ async function pdfUret(sId, boyut) {
 }
 
 // ====== SEVKİYAT LİSTESİ + DETAY ======
+const GECMIS_ARALIKLARI = [
+  { gun: 1,  etiket: 'Son 1 gün' },
+  { gun: 3,  etiket: 'Son 3 gün' },
+  { gun: 7,  etiket: 'Son 1 hafta' },
+  { gun: 14, etiket: 'Son 2 hafta' },
+  { gun: 30, etiket: 'Son 1 ay' },
+];
+
+function gecmisAraligiGun() {
+  return parseInt(localStorage.getItem('ds_gecmis_gun') || '7', 10);
+}
+function gecmisAraligiDegistir(gun) {
+  localStorage.setItem('ds_gecmis_gun', String(gun));
+  render();
+}
+
 function ekranSevkiyatListesi() {
-  // Onaylanmış sevkiyatlar personel geçmişinden kaldırılır
-  const sevk = state.sevkiyatlar.filter(s => s.kontrolDurumu !== 'onaylandi').sort((a, b) => b.tarih - a.tarih);
-  const liste = sevk.map(s => `
+  const gun = gecmisAraligiGun();
+  const simdi = Date.now();
+  const sinir = simdi - gun * 24 * 60 * 60 * 1000;
+  // Onaylanmış sevkiyatlar dahil — seçili zaman aralığındaki tüm sevkiyatlar
+  const sevk = state.sevkiyatlar
+    .filter(s => (s.tarih || 0) >= sinir)
+    .sort((a, b) => b.tarih - a.tarih);
+
+  const araBar = `
+    <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:6px">
+      ${GECMIS_ARALIKLARI.map(a => `
+        <button onclick="gecmisAraligiDegistir(${a.gun})"
+          style="flex:0 0 auto;font-size:12px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid var(--line);
+          ${a.gun === gun ? 'background:var(--leather-dark);color:#fff;border-color:var(--leather-dark);font-weight:700' : 'background:var(--bg-card);color:var(--ink-soft)'}">
+          ${a.etiket}</button>`).join('')}
+    </div>`;
+
+  const liste = sevk.map(s => {
+    const onayli = s.kontrolDurumu === 'onaylandi';
+    return `
     <div class="shipment-item" onclick="sevkiyatDetayAc('${s.fsId}')">
       <div class="header"><span class="no">${s.sevkiyatNo}</span><span class="date">${tarihKisa(s.tarih)}</span></div>
-      <div class="customer">${s.musteriAd}</div>
+      <div class="customer">${escapeHtml(s.musteriAd||'')} ${onayli ? '<span style="font-size:11px;color:var(--green);font-weight:700">✓ Onaylı</span>' : '<span style="font-size:11px;color:var(--amber);font-weight:700">⏳ Bekliyor</span>'}</div>
       <div class="totals">
-        <span>📦 ${s.deriler.length} fiş</span>
+        <span>📦 ${(s.deriler||[]).length} paket</span>
         <span>🐂 ${s.toplamAdet} deri</span>
-        <span>📐 ${(s.toplamYuzeyDm2 || s.toplamYuzey || 0).toFixed(0)} dm²</span>
+        <span>📐 ${sayiFormatla(s.toplamYuzeyDm2 || s.toplamYuzey || 0)} dm²</span>
         <span style="color:var(--ink-faint)">${(s.toplamYuzeyFt2 || 0).toFixed(2)} ft²</span>
       </div>
-    </div>`).join('');
+    </div>`; }).join('');
+
   return `
     <div class="topbar">
       <button onclick="geriDon();" style="font-size:13px">‹ Geri</button>
@@ -2503,7 +2554,8 @@ function ekranSevkiyatListesi() {
       <div style="width:80px"></div>
     </div>
     <div class="content">
-      ${sevk.length === 0 ? `<div class="empty"><div class="icon">⎙</div><div>Henüz sevkiyat yok</div></div>` : `<div class="section-title">${sevk.length} sevkiyat</div>${liste}`}
+      ${araBar}
+      ${sevk.length === 0 ? `<div class="empty"><div class="icon">⎙</div><div>Bu aralıkta sevkiyat yok</div></div>` : `<div class="section-title">${sevk.length} sevkiyat</div>${liste}`}
     </div>`;
 }
 
@@ -2556,15 +2608,15 @@ function ekranSevkiyatDetay() {
           <div class="item"><div class="value">${(s.deriler||[]).length}</div><div class="label">Paket</div></div>
           <div class="item"><div class="value">${s.toplamAdet}</div><div class="label">Deri</div></div>
           <div class="item">
-            <div class="value">${dm2Top.toFixed(0)}</div>
+            <div class="value">${sayiFormatla(dm2Top)}</div>
             <div class="label">dm²</div>
             <div style="font-size:10px;opacity:0.7">${ft2Top.toFixed(2)} ft²</div>
           </div>
         </div>
         ${ecoGruplar.length > 0 ? `
         <div style="display:flex;gap:12px;margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.1);font-size:12px">
-          <span>Standart: <b>${stdDm2.toFixed(0)}</b> dm²</span>
-          <span style="color:var(--amber)">ECO: <b>${ecoDm2.toFixed(0)}</b> dm²</span>
+          <span>Standart: <b>${sayiFormatla(stdDm2)}</b> dm²</span>
+          <span style="color:var(--amber)">ECO: <b>${sayiFormatla(ecoDm2)}</b> dm²</span>
         </div>` : ''}
       </div>
 
@@ -2598,7 +2650,7 @@ function ekranSevkiyatDetay() {
             <span style="width:24px;color:var(--ink-faint);font-weight:700">${i+1}</span>
             <span style="flex:1">${escapeHtml(d.cins||'')} · ${escapeHtml(d.renk||'')} · ${escapeHtml(d.kalite||'')}</span>
             <span class="mono">${d.deriAdedi}ad</span>
-            <span class="mono" style="font-weight:700">${(d.toplamYuzeyDm2||0).toFixed(0)}</span>
+            <span class="mono" style="font-weight:700">${sayiFormatla(d.toplamYuzeyDm2||0)}</span>
             <span class="mono" style="color:var(--ink-faint);font-size:11px">${(d.toplamYuzeyFt2||0).toFixed(2)}</span>
             <span style="width:22px;text-align:center;font-size:15px">${varFoto ? '📷' : '<span style=\"color:var(--ink-faint);font-size:11px\">—</span>'}</span>
           </div>`;
@@ -2621,7 +2673,7 @@ function sevkiyatKontrolOnay(fsId) {
         <div style="font-size:36px;margin-bottom:8px">✅</div>
         <h3>Sevkiyatı Onayla?</h3>
         <div style="font-size:14px;color:var(--ink-soft);margin-top:6px">${s.musteriAd} · ${s.sevkiyatNo}</div>
-        <div style="font-size:13px;color:var(--ink-faint)">${s.toplamAdet} deri · ${(s.toplamYuzeyDm2||0).toFixed(0)} dm²</div>
+        <div style="font-size:13px;color:var(--ink-faint)">${s.toplamAdet} deri · ${sayiFormatla(s.toplamYuzeyDm2||0)} dm²</div>
       </div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn secondary" style="flex:1" onclick="document.querySelector('.modal-bg').remove()">İptal</button>
@@ -2980,7 +3032,7 @@ function ekranYonetici() {
           <summary style="padding:14px;cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px">
             <div style="flex:1">
               <div style="font-family:'Fraunces';font-weight:600;font-size:15px">${escapeHtml(m.ad)}</div>
-              <div style="font-size:12px;color:var(--ink-faint)">${m.kod} · ${m.sevkiyatlar.length} sevkiyat · ${topDm2.toFixed(0)} dm²</div>
+              <div style="font-size:12px;color:var(--ink-faint)">${m.kod} · ${m.sevkiyatlar.length} sevkiyat · ${sayiFormatla(topDm2)} dm²</div>
             </div>
             <span style="color:var(--ink-faint);font-size:18px">›</span>
           </summary>
@@ -3007,7 +3059,7 @@ function ekranYonetici() {
           <summary style="padding:14px;cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px">
             <div style="flex:1">
               <div style="font-family:'Fraunces';font-weight:600;font-size:15px">👤 ${escapeHtml(p.ad)}</div>
-              <div style="font-size:12px;color:var(--ink-faint)">${p.sayim} sevkiyat · ${p.adet} deri · ${p.dm2.toFixed(0)} dm²</div>
+              <div style="font-size:12px;color:var(--ink-faint)">${p.sayim} sevkiyat · ${p.adet} deri · ${sayiFormatla(p.dm2)} dm²</div>
             </div>
             <span style="color:var(--ink-faint);font-size:18px">›</span>
           </summary>
@@ -3073,7 +3125,7 @@ function sevkiyatKarti(s) {
     <div class="totals">
       <span>👤 ${escapeHtml(s.personelAd||'?')}</span>
       <span>🐂 ${s.toplamAdet} deri</span>
-      <span>📐 ${(s.toplamYuzeyDm2||0).toFixed(0)} dm²</span>
+      <span>📐 ${sayiFormatla(s.toplamYuzeyDm2||0)} dm²</span>
     </div>
     ${s.not ? `<div style="margin-top:6px;padding:6px 10px;background:var(--gold-soft,#fef6e4);border-radius:6px;font-size:12px;color:var(--ink-soft)">📝 ${escapeHtml(s.not)}</div>` : ''}
   </div>`;
