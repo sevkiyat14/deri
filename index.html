@@ -2995,13 +2995,21 @@ function ekranYonetici() {
 
   } else if (state.yoneticiSekme === 'arama') {
     const aramaVal = state._yoneticiArama || '';
+    const gun = aramaAraligiGun();
     // Sonuçları ayrı div'e render et — input'u yeniden çizmeden cursor korunur
     icerik = `
-      <div style="margin-bottom:14px">
+      <div style="margin-bottom:10px">
         <input class="input" id="yonetici-arama" placeholder="Sevkiyat no (S-0001) veya tarih (31.12.2025)..."
           value="${escapeHtml(aramaVal)}"
           oninput="aramaGuncelle(this.value)"
           style="font-size:15px">
+      </div>
+      <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:6px">
+        ${GECMIS_ARALIKLARI.map(a => `
+          <button onclick="aramaAraligiDegistir(${a.gun})"
+            style="flex:0 0 auto;font-size:12px;padding:6px 12px;border-radius:999px;cursor:pointer;border:1px solid var(--line);
+            ${a.gun === gun ? 'background:var(--leather-dark);color:#fff;border-color:var(--leather-dark);font-weight:700' : 'background:var(--bg-card);color:var(--ink-soft)'}">
+            ${a.etiket}</button>`).join('')}
       </div>
       <div id="arama-sonuclar">${aramaHtml(aramaVal, sevk)}</div>`;
 
@@ -3112,7 +3120,7 @@ function sevkiyatKarti(s) {
       <span class="no">${s.sevkiyatNo}</span>
       <span class="date">${tarihFormatla(s.tarih)}</span>
     </div>
-    <div class="customer">${escapeHtml(s.musteriAd||'')}</div>
+    <div class="customer">${escapeHtml(s.musteriAd||'')} ${s.kontrolDurumu === 'onaylandi' ? '<span style="font-size:11px;color:var(--green);font-weight:700">✓ Onaylı</span>' : '<span style="font-size:11px;color:var(--amber);font-weight:700">⏳ Bekliyor</span>'}</div>
     <div class="totals">
       <span>👤 ${escapeHtml(s.personelAd||'?')}</span>
       <span>🐂 ${s.toplamAdet} deri</span>
@@ -3142,16 +3150,33 @@ function sevkiyatKartiOnay(s) {
   </div>`;
 }
 
+function aramaAraligiGun() {
+  return parseInt(localStorage.getItem('ds_arama_gun') || '7', 10);
+}
+function aramaAraligiDegistir(gun) {
+  localStorage.setItem('ds_arama_gun', String(gun));
+  render();
+}
+
 function aramaHtml(aramaVal, sevk) {
-  if (aramaVal.length < 2) return '<div style="text-align:center;color:var(--ink-faint);padding:20px;font-size:13px">En az 2 karakter girin</div>';
-  const q = aramaVal.toLowerCase();
-  const sonuclar = sevk.filter(s =>
-    (s.sevkiyatNo || '').toLowerCase().includes(q)
-    || tarihKisa(s.tarih).includes(q)
-    || (s.musteriAd || '').toLowerCase().includes(q)
-  ).slice().sort((a,b)=>b.tarih-a.tarih);
-  if (sonuclar.length === 0) return '<div class="empty"><div class="icon">🔍</div><div>Sonuç bulunamadı</div></div>';
-  return `<div style="font-size:12px;color:var(--ink-faint);margin-bottom:8px">${sonuclar.length} sonuç</div>` + sonuclar.map(s => sevkiyatKarti(s)).join('');
+  // Onaylı + bekleyen tüm sevkiyatlar dahil
+  const q = (aramaVal || '').trim().toLowerCase();
+  let liste;
+  if (q.length >= 2) {
+    // Arama metni varsa zaman aralığından bağımsız, tüm kayıtlarda ara
+    liste = sevk.filter(s =>
+      (s.sevkiyatNo || '').toLowerCase().includes(q)
+      || tarihKisa(s.tarih).includes(q)
+      || (s.musteriAd || '').toLowerCase().includes(q));
+  } else {
+    // Arama yoksa seçili zaman aralığındaki tüm sevkiyatları listele
+    const gun = aramaAraligiGun();
+    const sinir = Date.now() - gun * 24 * 60 * 60 * 1000;
+    liste = sevk.filter(s => (s.tarih || 0) >= sinir);
+  }
+  liste = liste.slice().sort((a,b)=>b.tarih-a.tarih);
+  if (liste.length === 0) return '<div class="empty"><div class="icon">🔍</div><div>Sonuç bulunamadı</div></div>';
+  return `<div style="font-size:12px;color:var(--ink-faint);margin-bottom:8px">${liste.length} sevkiyat</div>` + liste.map(s => sevkiyatKarti(s)).join('');
 }
 
 function aramaGuncelle(val) {
