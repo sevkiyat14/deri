@@ -2408,10 +2408,10 @@ function pdfIcerikDoldur(pdf, s, boyut) {
   const gruplar = derilerGrupla(s.deriler || []);
   let toplamAdet = 0, toplamDm2 = 0, toplamFt2 = 0;
   // Her paketin dm² değeri ayrı kutu içinde — çok kolonlu, sayfaya çok sığar
-  const kutuKolon = 5;
-  const kutuBosluk = 2;
+  const kutuKolon = 7;
+  const kutuBosluk = 1.5;
   const kutuW = (W - 2 * margin - (kutuKolon - 1) * kutuBosluk) / kutuKolon;
-  const kutuH = 6;
+  const kutuH = 7;
 
   gruplar.forEach(g => {
     toplamAdet += g.toplamAdet; toplamDm2 += g.toplamDm2; toplamFt2 += g.toplamFt2;
@@ -2425,15 +2425,15 @@ function pdfIcerikDoldur(pdf, s, boyut) {
     const kaliteStr = [...g.kaliteler].join(', ');
     const baslik = `${g.kod} · ${g.cins} · ${g.renk}${g.ecoGrup ? ' (ECO)' : ''} · ${kaliteStr}`;
     pdf.text(baslik.substring(0, 55), margin + 2, y);
-    pdf.text(`${g.fisler.length} paket · ${g.toplamAdet} adet · ${g.toplamDm2.toFixed(0)} dm2`,
+    pdf.text(`${g.fisler.length} paket · ${g.toplamAdet} adet · ${sayiFormatla(g.toplamDm2)} dm2`,
              W - margin - 2, y, { align: 'right' });
     y += 7;
 
     // Her paketin dm² değeri ayrı kutu içinde (seri no yok)
     const dm2ler = g.fisler.map(f =>
       typeof f.toplamYuzeyDm2 === 'number' ? f.toplamYuzeyDm2 : (f.toplamYuzeyDm2?.deger || 0));
-    pdf.setFont('helvetica', 'normal');
-    pdf.setFontSize(8);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(11);
     pdf.setDrawColor(160, 160, 160);
     for (let i = 0; i < dm2ler.length; i += kutuKolon) {
       yerAyir(kutuH + 2);
@@ -2441,8 +2441,8 @@ function pdfIcerikDoldur(pdf, s, boyut) {
         const idx = i + k;
         if (idx >= dm2ler.length) break;
         const bx = margin + k * (kutuW + kutuBosluk);
-        pdf.rect(bx, y - 4, kutuW, kutuH);
-        pdf.text(dm2ler[idx].toFixed(1), bx + kutuW / 2, y, { align: 'center' });
+        pdf.rect(bx, y - 4.5, kutuW, kutuH);
+        pdf.text(String(Math.round(dm2ler[idx])), bx + kutuW / 2, y, { align: 'center' });
       }
       y += kutuH + 1.5;
     }
@@ -2456,7 +2456,7 @@ function pdfIcerikDoldur(pdf, s, boyut) {
   pdf.setFont('helvetica', 'bold');
   pdf.setFontSize(9);
   pdf.text('GENEL TOPLAM', margin + 2, y);
-  pdf.text(`${toplamAdet} adet · ${toplamDm2.toFixed(0)} dm2 · ${toplamFt2.toFixed(2)} ft2`,
+  pdf.text(`${toplamAdet} adet · ${sayiFormatla(toplamDm2)} dm2 · ${toplamFt2.toFixed(2)} ft2`,
            W - margin - 2, y, { align: 'right' });
   y += 14;
 
