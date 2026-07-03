@@ -2363,9 +2363,22 @@ function sevkiyatBul(sId) {
 
 function pdfOlustur(s, boyut) {
   const { jsPDF } = window.jspdf;
-  const pdf = new jsPDF({ unit: 'mm', format: boyut.toLowerCase() });
+  // A5 çıktı yatay olsun — baskı/kolaylık için
+  const yon = boyut === 'A5' ? 'landscape' : 'portrait';
+  const pdf = new jsPDF({ unit: 'mm', format: boyut.toLowerCase(), orientation: yon });
   pdfIcerikDoldur(pdf, s, boyut);
   return pdf;
+}
+
+// jsPDF varsayılan fontu Türkçe karakter gösteremez → ASCII karşılıklarına çevir
+function trAscii(v) {
+  return String(v == null ? '' : v)
+    .replace(/ı/g, 'i').replace(/İ/g, 'I')
+    .replace(/ş/g, 's').replace(/Ş/g, 'S')
+    .replace(/ğ/g, 'g').replace(/Ğ/g, 'G')
+    .replace(/ç/g, 'c').replace(/Ç/g, 'C')
+    .replace(/ö/g, 'o').replace(/Ö/g, 'O')
+    .replace(/ü/g, 'u').replace(/Ü/g, 'U');
 }
 
 function pdfIcerikDoldur(pdf, s, boyut) {
@@ -2388,18 +2401,18 @@ function pdfIcerikDoldur(pdf, s, boyut) {
   y += 6;
   pdf.setFontSize(9);
   pdf.setFont('helvetica', 'bold'); pdf.text('Sevkiyat No:', margin, y);
-  pdf.setFont('helvetica', 'normal'); pdf.text(String(s.sevkiyatNo || ''), margin + 22, y);
+  pdf.setFont('helvetica', 'normal'); pdf.text(trAscii(s.sevkiyatNo || ''), margin + 22, y);
   pdf.setFont('helvetica', 'bold'); pdf.text('Tarih:', W - margin - 40, y);
-  pdf.setFont('helvetica', 'normal'); pdf.text(tarihFormatla(s.tarih), W - margin - 28, y);
+  pdf.setFont('helvetica', 'normal'); pdf.text(trAscii(tarihFormatla(s.tarih)), W - margin - 28, y);
   y += 5;
   pdf.setFont('helvetica', 'bold'); pdf.text('Musteri:', margin, y);
-  pdf.setFont('helvetica', 'normal'); pdf.text(String(s.musteriAd || ''), margin + 22, y);
+  pdf.setFont('helvetica', 'normal'); pdf.text(trAscii(s.musteriAd || ''), margin + 22, y);
   pdf.setFont('helvetica', 'bold'); pdf.text('Kod:', W - margin - 40, y);
-  pdf.setFont('helvetica', 'normal'); pdf.text(String(s.musteriKod || ''), W - margin - 28, y);
+  pdf.setFont('helvetica', 'normal'); pdf.text(trAscii(s.musteriKod || ''), W - margin - 28, y);
   y += 5;
   if (s.not) {
     pdf.setFont('helvetica', 'italic');
-    pdf.text('Not: ' + s.not.substring(0, 80), margin, y);
+    pdf.text(trAscii('Not: ' + s.not).substring(0, 80), margin, y);
     y += 5;
   }
   y += 3;
@@ -2423,8 +2436,8 @@ function pdfIcerikDoldur(pdf, s, boyut) {
     pdf.setFont('helvetica', 'bold');
     pdf.setFontSize(9);
     const kaliteStr = [...g.kaliteler].join(', ');
-    const baslik = `${g.kod} · ${g.cins} · ${g.renk}${g.ecoGrup ? ' (ECO)' : ''} · ${kaliteStr}`;
-    pdf.text(baslik.substring(0, 55), margin + 2, y);
+    const baslik = trAscii(`${g.kod} - ${g.cins} - ${g.renk}${g.ecoGrup ? ' (ECO)' : ''} - ${kaliteStr}`);
+    pdf.text(baslik.substring(0, 60), margin + 2, y);
     pdf.text(`${g.fisler.length} paket · ${g.toplamAdet} adet · ${sayiFormatla(g.toplamDm2)} dm2`,
              W - margin - 2, y, { align: 'right' });
     y += 7;
