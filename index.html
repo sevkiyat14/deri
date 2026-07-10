@@ -334,6 +334,8 @@ function geriDon() {
   durumKaydet();
 }
 window.addEventListener('popstate', (e) => {
+  // Canlı kamera açıksa önce kamerayı kapat (stream durdur)
+  if (_kameraStream || document.querySelector('.kamera-modal')) { kameraKapat(); history.pushState({}, '', ''); return; }
   // Modal açıksa önce onu kapat
   const modal = document.querySelector('.modal-bg');
   if (modal) { modal.remove(); history.pushState({}, '', ''); return; }
@@ -459,7 +461,7 @@ const Storage = {
 };
 
 // ====== CLAUDE VISION OCR (PRIMARY) ======
-async function claudeOcr(imageDataUrl) {
+async function claudeOcr(imageDataUrl, model = 'claude-haiku-4-5-20251001') {
   const match = imageDataUrl.match(/^data:image\/([\w+]+);base64,(.+)$/);
   if (!match) throw new Error('Geçersiz görsel');
   let mediaType = `image/${match[1]}`;
@@ -502,7 +504,7 @@ async function claudeOcr(imageDataUrl) {
     method: "POST",
     headers,
     body: JSON.stringify({
-      model: "claude-sonnet-4-6",
+      model,
       max_tokens: 1500,
       messages: [{
         role: "user",
@@ -540,7 +542,7 @@ function claudeJsonToInternal(json) {
   return {
     cins: alan(json.cins),
     renk: alan(json.renk),
-    kod: alan(json.kod),
+    kod: alan(kodNormalize(json.kod)),
     kalite: alan(json.kalite),
     seriNo: alan(json.seriNo),
     barkod: alan(json.barkod),
@@ -1054,15 +1056,40 @@ KURAL: Sadece toplam yüzeyi oku. Tek tek deri ölçümlerini gönderme, yuzeyOl
 // Akış: Claude Vision (resim → yapılandırılmış JSON) → parser yedek
 async function ocrYap(imageData, onProgress) {
 
-  // ADIM 1: Claude Vision — resmi doğrudan okur ve yorumlar
+  // Görseli OCR öncesi 1568px'e küçült — token/maliyet düşer
+  let gorsel = imageData;
+  try { gorsel = await gorseliKucult(imageData, 1568, 0.85); } catch(e) {}
+
+  // ADIM 1: Claude Vision — önce ucuz Haiku dene, gerekirse Sonnet'e yükselt
   try {
-    onProgress?.('Claude Vision okuyor...', 0.4);
-    const json = await claudeOcr(imageData);
+    onProgress?.('Claude Vision (Haiku) okuyor...', 0.4);
+    const json = await claudeOcr(gorsel, 'claude-haiku-4-5-20251001');
     const veri = dogrula(claudeJsonToInternal(json));
-    return { veri, kaynak: 'claude', hamMetin: JSON.stringify(json, null, 2) };
+    // Zor durum: kritik alan eksik veya güven düşük → Sonnet ile yeniden dene
+    if (dogrulamaGerekiyor(veri) || (veri.genelGuven || 0) < 0.7) {
+      try {
+        onProgress?.('Zor okuma — Sonnet ile yeniden...', 0.6);
+        const json2 = await claudeOcr(gorsel, 'claude-sonnet-4-6');
+        const veri2 = dogrula(claudeJsonToInternal(json2));
+        // Sonnet daha iyiyse onu kullan
+        if ((veri2.genelGuven || 0) >= (veri.genelGuven || 0)) {
+          return { veri: veri2, kaynak: 'claude-sonnet', hamMetin: JSON.stringify(json2, null, 2) };
+        }
+      } catch (e2) { console.warn('Sonnet yükseltme:', e2.message); }
+    }
+    return { veri, kaynak: 'claude-haiku', hamMetin: JSON.stringify(json, null, 2) };
   } catch (e) {
-    console.warn('Claude Vision:', e.message);
-    toast('⚠ Claude: ' + e.message.substring(0, 60), 3000);
+    console.warn('Claude Vision (Haiku):', e.message);
+    // Haiku hata verdi — doğrudan Sonnet dene
+    try {
+      onProgress?.('Sonnet ile okuyor...', 0.6);
+      const json = await claudeOcr(gorsel, 'claude-sonnet-4-6');
+      const veri = dogrula(claudeJsonToInternal(json));
+      return { veri, kaynak: 'claude-sonnet', hamMetin: JSON.stringify(json, null, 2) };
+    } catch (e3) {
+      console.warn('Claude Vision (Sonnet):', e3.message);
+      toast('⚠ Claude: ' + e3.message.substring(0, 60), 3000);
+    }
   }
 
   // ADIM 2: Google Vision (isteğe bağlı, key varsa)
@@ -1155,6 +1182,26 @@ function fotoSikistir(dataUrl, maxW = 600, kalite = 0.45) {
       resolve(canvas.toDataURL('image/jpeg', kalite));
     };
     img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
+// OCR öncesi görseli küçült — en uzun kenar maxBoyut px. Token/maliyet düşer, doğruluk genelde etkilenmez.
+function gorseliKucult(dataUrl, maxBoyut = 1568, kalite = 0.85) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const enUzun = Math.max(img.width, img.height);
+      const oran = Math.min(maxBoyut / enUzun, 1);
+      if (oran >= 1) { resolve(dataUrl); return; } // zaten küçük — dokunma
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * oran);
+      canvas.height = Math.round(img.height * oran);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', kalite));
+    };
+    img.onerror = () => resolve(dataUrl);
     img.src = dataUrl;
   });
 }
@@ -1709,7 +1756,7 @@ function ekranTopluCekim() {
     </div>
     <input type="file" accept="image/*" capture="environment" class="hidden-input" id="kamera-input" onchange="fisCekildi(this.files[0])">
     <button class="manual-fab" onclick="manuelFisEkle()">＋ Manuel Giriş</button>
-    <div class="capture-fab" onclick="document.getElementById('kamera-input').click(); titret(40);">
+    <div class="capture-fab" onclick="kameraAc()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
         <circle cx="12" cy="13" r="4"/>
@@ -1758,6 +1805,132 @@ function fotoOnayla() {
     const inp = document.getElementById('kamera-input');
     if (inp) { inp.value = ''; inp.click(); titret(40); }
   }, 300);
+}
+
+// ====== CANLI KAMERA — SÜREKLİ ÇEKİM ======
+let _kameraStream = null;
+async function kameraAc() {
+  titret(40);
+  // getUserMedia yoksa/başarısızsa klasik dosya girişine düş
+  if (!navigator.mediaDevices?.getUserMedia) { dosyaKameraAc(); return; }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1920 } },
+      audio: false
+    });
+  } catch(e) { dosyaKameraAc(); return; }
+  _kameraStream = stream;
+  const mbg = document.createElement('div');
+  mbg.className = 'modal-bg kamera-modal';
+  mbg.style.cssText = 'background:#000;z-index:9999;display:flex;flex-direction:column;padding:0';
+  mbg.innerHTML = `
+    <div style="position:relative;flex:1;overflow:hidden;display:flex;align-items:center;justify-content:center">
+      <video id="kamera-video" playsinline autoplay muted style="width:100%;height:100%;object-fit:contain"></video>
+      <div id="kamera-sayac" style="position:absolute;top:16px;left:16px;background:rgba(0,0,0,0.6);color:#fff;font-weight:700;padding:6px 12px;border-radius:999px;font-size:14px">${state.aktifFisler.length} fiş</div>
+      <div id="kamera-flash" style="position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none"></div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 24px;background:#000">
+      <button onclick="kameraKapat()" style="color:#fff;background:none;border:none;font-size:16px;font-weight:700">✓ Bitir</button>
+      <div onclick="kameraCek()" style="width:74px;height:74px;border-radius:50%;background:#fff;border:5px solid rgba(255,255,255,0.35);cursor:pointer"></div>
+      <div style="width:54px;font-size:11px;color:#bbb;text-align:right;line-height:1.3">Sürekli<br>çekim</div>
+    </div>`;
+  document.body.appendChild(mbg);
+  const video = document.getElementById('kamera-video');
+  video.srcObject = stream;
+  try { await video.play(); } catch(e) {}
+}
+
+function dosyaKameraAc() {
+  const inp = document.getElementById('kamera-input');
+  if (inp) { inp.value = ''; inp.click(); }
+}
+
+function kameraCek() {
+  const video = document.getElementById('kamera-video');
+  if (!video || !video.videoWidth) return;
+  titret(30);
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  const fotoData = canvas.toDataURL('image/jpeg', 0.9);
+  // Flash efekti
+  const fl = document.getElementById('kamera-flash');
+  if (fl) { fl.style.transition = 'none'; fl.style.opacity = '0.85';
+    requestAnimationFrame(() => { fl.style.transition = 'opacity 0.35s'; fl.style.opacity = '0'; }); }
+  // Kuyruğa ekle — render etmeden (kamera açık kalsın), OCR arka planda
+  const fis = { id: Date.now() + Math.random(), durum: 'beklemede', foto: fotoData, veri: null, hata: null, kaynak: null, olusturma: Date.now() };
+  state.aktifFisler.push(fis);
+  const sayac = document.getElementById('kamera-sayac');
+  if (sayac) sayac.textContent = `${state.aktifFisler.length} fiş`;
+  islemKuyruguIsle();
+}
+
+function kameraKapat() {
+  if (_kameraStream) { _kameraStream.getTracks().forEach(t => t.stop()); _kameraStream = null; }
+  document.querySelector('.kamera-modal')?.remove();
+  render();
+}
+
+// ====== FİŞLERİ BİRLEŞTİR (kod düzeltme) ======
+function fisBirlestirDialog(onSecili) {
+  const onayli = state.aktifFisler.filter(f => f.durum === 'hazir' || f.durum === 'onaylandi');
+  const kodMap = {};
+  onayli.forEach(f => {
+    const k = kodNormalize(f.veri?.kod?.deger) || '(boş)';
+    if (!kodMap[k]) kodMap[k] = { kod: k, adet: 0, cins: f.veri?.cins?.deger || '', renk: f.veri?.renk?.deger || '' };
+    kodMap[k].adet++;
+  });
+  const kodlar = Object.values(kodMap);
+  if (kodlar.length < 2) { toast('Birleştirilecek farklı kod yok'); return; }
+  const onSet = new Set(onSecili || []);
+  const mbg = document.createElement('div');
+  mbg.className = 'modal-bg';
+  mbg.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()" style="padding:20px">
+      <div class="modal-handle"></div>
+      <h3 style="margin-bottom:6px">🔗 Fişleri Birleştir</h3>
+      <div style="font-size:13px;color:var(--ink-soft);margin-bottom:12px">Birleştirilecek kodları seçin, sonra hepsinin alacağı hedef kodu yazın.</div>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;max-height:40vh;overflow-y:auto">
+        ${kodlar.map(k => `
+          <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer">
+            <input type="checkbox" class="brl-kod" value="${escapeHtml(k.kod)}" ${onSet.has(k.kod) ? 'checked' : ''} onchange="birlestirHedefGuncelle()">
+            <span style="flex:1"><b class="mono">${escapeHtml(k.kod)}</b> <span style="font-size:12px;color:var(--ink-faint)">${escapeHtml(k.cins)} · ${escapeHtml(k.renk)}</span></span>
+            <span style="font-size:12px;color:var(--ink-soft)">${k.adet} paket</span>
+          </label>`).join('')}
+      </div>
+      <div class="input-group"><label class="input-label">Hedef kod</label>
+        <input class="input mono" id="birlestir-hedef" placeholder="Örn. AS751" oninput="this.dataset.dokunuldu=1"></div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn secondary" style="flex:1" onclick="this.closest('.modal-bg').remove()">İptal</button>
+        <button class="btn gold" style="flex:2" onclick="fisBirlestirUygula()">Birleştir</button>
+      </div>
+    </div>`;
+  mbg.onclick = () => mbg.remove();
+  document.body.appendChild(mbg);
+  birlestirHedefGuncelle();
+}
+
+function birlestirHedefGuncelle() {
+  const secili = [...document.querySelectorAll('.brl-kod:checked')].map(c => c.value).filter(k => k !== '(boş)');
+  const hedef = document.getElementById('birlestir-hedef');
+  if (hedef && !hedef.dataset.dokunuldu && secili.length) hedef.value = secili[0];
+}
+
+function fisBirlestirUygula() {
+  const secili = [...document.querySelectorAll('.brl-kod:checked')].map(c => c.value);
+  const hedef = kodNormalize(document.getElementById('birlestir-hedef')?.value);
+  if (secili.length < 1 || !hedef) { toast('Kod seçin ve hedef kodu girin'); return; }
+  let sayi = 0;
+  state.aktifFisler.forEach(f => {
+    if (f.durum !== 'hazir' && f.durum !== 'onaylandi') return;
+    const k = kodNormalize(f.veri?.kod?.deger) || '(boş)';
+    if (secili.includes(k)) { f.veri.kod.deger = hedef; f.veri.kod.guven = 0.99; sayi++; }
+  });
+  document.querySelector('.modal-bg')?.remove();
+  toast(`✓ ${sayi} paket '${hedef}' altında birleştirildi`);
+  render();
 }
 
 function manuelFisEkle() {
@@ -2069,6 +2242,11 @@ function fisSil(idx) {
 }
 
 // ====== GRUPLAMA — Kod + Kalite (ECO ayrı) ======
+// Kod normalize: büyük harf + tüm boşlukları kaldır — "as 751" ile "AS751" aynı sayılsın
+function kodNormalize(k) {
+  return String(k == null ? '' : k).toUpperCase().replace(/\s+/g, '').trim();
+}
+
 function derilerGrupla(deriler) {
   const gruplar = {};
   deriler.forEach(d => {
@@ -2076,7 +2254,7 @@ function derilerGrupla(deriler) {
     const kal = String(kalRaw).toUpperCase();
     const isEco = kal.startsWith('ECO');
     const kodRaw = typeof d.kod === 'string' ? d.kod : (d.kod?.deger || d.veri?.kod?.deger || '?');
-    const kod = String(kodRaw);
+    const kod = kodNormalize(kodRaw) || '?';
     const key = `${kod}_${isEco ? 'ECO' : 'STD'}`;
     if (!gruplar[key]) {
       const cinsRaw = typeof d.cins === 'string' ? d.cins : (d.cins?.deger || d.veri?.cins?.deger || '?');
@@ -2147,6 +2325,22 @@ function ekranInceleme() {
 
   const grupHtml = gruplar.map(g => grupKartiHtml(g)).join('');
 
+  // Aynı cins+renk ama farklı kod → olası yanlış okuma, birleştirme öner
+  const crMap = {};
+  gruplar.forEach(g => {
+    const cr = `${(g.cins||'').toUpperCase().trim()}|${(g.renk||'').toUpperCase().trim()}`;
+    if (!crMap[cr]) crMap[cr] = [];
+    if (!crMap[cr].includes(g.kod)) crMap[cr].push(g.kod);
+  });
+  const oneriler = Object.entries(crMap).filter(([_, kodlar]) => kodlar.length > 1);
+  const oneriHtml = oneriler.map(([cr, kodlar]) => {
+    const [cins, renk] = cr.split('|');
+    return `<div style="background:var(--amber-soft,#fdf0d5);border-left:3px solid var(--amber);border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:13px">
+      <div style="margin-bottom:6px">⚠ <b>${escapeHtml(cins)} · ${escapeHtml(renk)}</b> için farklı kodlar okundu: <span class="mono">${kodlar.map(escapeHtml).join(', ')}</span> — aynı ürün olabilir.</div>
+      <button class="btn gold btn-small" onclick='fisBirlestirDialog(${JSON.stringify(kodlar)})'>🔗 Birleştir</button>
+    </div>`;
+  }).join('');
+
   // Tek tek fişler (düzenleme için tıklanabilir)
   const fisListesi = onayli.map(f => {
     const idx = state.aktifFisler.indexOf(f);
@@ -2185,7 +2379,12 @@ function ekranInceleme() {
         </div>` : ''}
       </div>
 
-      <div class="section-title">Ürün Grupları (${gruplar.length})</div>
+      ${oneriHtml}
+
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px">
+        <div class="section-title" style="margin:0">Ürün Grupları (${gruplar.length})</div>
+        ${gruplar.length > 1 ? `<button class="btn secondary btn-small" onclick="fisBirlestirDialog()">🔗 Birleştir</button>` : ''}
+      </div>
       ${grupHtml}
 
       <details style="margin-top:12px">
