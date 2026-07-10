@@ -480,12 +480,24 @@ async function claudeOcr(imageDataUrl, model = 'claude-haiku-4-5-20251001') {
   }
   // apiKey yoksa artifact ortamında otomatik yetkilendirme denenecek
 
-  const prompt = `Bu bir Türk deri fabrikası sevkiyat etiketidir. Fotoğraf kıvrımlı veya bozuk bile olsa tüm alanları oku. Etiketteki TÜM bilgileri tam ve doğru biçimde çıkar. YALNIZCA JSON döndür, başka hiçbir şey yazma:
+  const prompt = `Bu bir Türk deri fabrikası sevkiyat etiketidir.
+
+ETİKET DÜZENİ (bu alanlara odaklan):
+- ÜST BÖLÜM: "Cins: ...", "Renk: ...", "Kod: ...", "Kalite: ..." — her biri iki nokta üst üste (:) işaretinden SONRA gelen değerdir.
+- ALT BÖLÜM: "Deri Adedi: ...", "Toplam Yüzey: ..." — sayısal değerler.
+
+OKUMA KURALLARI (çok önemli):
+1. ":" işareti sadece bir ayraçtır — onu bir rakam, harf veya şekil olarak OKUMA. Değer ":" işaretinden sonra başlar.
+2. Rakamları TEK TEK ve dikkatle oku. 0/O, 1/7, 2/Z, 5/S, 6/8, 8/B, 3/8 karışabilir — bağlama göre en olası olanı seç ama UYDURMA.
+3. Kod genelde "4160 200" gibi rakam gruplarıdır. Her haneyi ayrı ayrı doğrula; emin değilsen tahmin etme, olduğu gibi bırak.
+4. Emin olmadığın haneyi değiştirme; gördüğünü yaz.
+
+YALNIZCA JSON döndür, başka hiçbir şey yazma:
 
 {
   "cins": "ürün cinsi — DLP RUGAN, NATUREL ZENIT, MILANO, ASTAR gibi (birden fazla kelime olabilir)",
   "renk": "SIYAH, KAHVE, BEYAZ vb.",
-  "kod": "alfanümerik kod — boş olabilir",
+  "kod": "'Kod:' etiketinden sonraki alfanümerik kod (örn. 4160 200) — boş olabilir",
   "kalite": "A, A2, ECO, ECO2, B, C arasından biri",
   "seriNo": "T1 N. satırındaki rakamlar, baştaki sıfırlar dahil (örn: 000000001)",
   "barkod": "barkod altındaki rakamlar (10-14 hane)",
@@ -1933,6 +1945,70 @@ function fisBirlestirUygula() {
   render();
 }
 
+// ====== KAYITLI SEVKİYATTA KOD BİRLEŞTİR (Firestore günceller) ======
+function sevkiyatKodBirlestirDialog(fsId) {
+  const s = state.yoneticiSevkiyatlar?.find(x => x.fsId === fsId) || state.aktifSevkiyatDetay;
+  if (!s || !(s.deriler || []).length) { toast('Sevkiyat bulunamadı'); return; }
+  const kodMap = {};
+  (s.deriler || []).forEach(d => {
+    const k = kodNormalize(d.kod) || '(boş)';
+    if (!kodMap[k]) kodMap[k] = { kod: k, adet: 0, cins: d.cins || '', renk: d.renk || '' };
+    kodMap[k].adet++;
+  });
+  const kodlar = Object.values(kodMap);
+  if (kodlar.length < 2) { toast('Birleştirilecek farklı kod yok'); return; }
+  const mbg = document.createElement('div');
+  mbg.className = 'modal-bg';
+  mbg.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()" style="padding:20px">
+      <div class="modal-handle"></div>
+      <h3 style="margin-bottom:6px">🔗 Kodları Birleştir</h3>
+      <div style="font-size:13px;color:var(--ink-soft);margin-bottom:12px">Kayıtlı sevkiyatta seçili kodlar tek koda dönüştürülür (kalıcı).</div>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;max-height:40vh;overflow-y:auto">
+        ${kodlar.map(k => `
+          <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;cursor:pointer">
+            <input type="checkbox" class="brl-kod" value="${escapeHtml(k.kod)}" onchange="birlestirHedefGuncelle()">
+            <span style="flex:1"><b class="mono">${escapeHtml(k.kod)}</b> <span style="font-size:12px;color:var(--ink-faint)">${escapeHtml(k.cins)} · ${escapeHtml(k.renk)}</span></span>
+            <span style="font-size:12px;color:var(--ink-soft)">${k.adet} paket</span>
+          </label>`).join('')}
+      </div>
+      <div class="input-group"><label class="input-label">Hedef kod</label>
+        <input class="input mono" id="birlestir-hedef" placeholder="Örn. 4160 200" oninput="this.dataset.dokunuldu=1"></div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn secondary" style="flex:1" onclick="this.closest('.modal-bg').remove()">İptal</button>
+        <button class="btn gold" style="flex:2" onclick="sevkiyatKodBirlestirUygula('${fsId}')">Birleştir</button>
+      </div>
+    </div>`;
+  mbg.onclick = () => mbg.remove();
+  document.body.appendChild(mbg);
+}
+
+async function sevkiyatKodBirlestirUygula(fsId) {
+  const secili = [...document.querySelectorAll('.brl-kod:checked')].map(c => c.value);
+  const hedef = kodNormalize(document.getElementById('birlestir-hedef')?.value);
+  if (secili.length < 1 || !hedef) { toast('Kod seçin ve hedef kodu girin'); return; }
+  const s = state.yoneticiSevkiyatlar?.find(x => x.fsId === fsId) || state.aktifSevkiyatDetay;
+  if (!s) { toast('Sevkiyat bulunamadı'); return; }
+  let sayi = 0;
+  const yeniDeriler = (s.deriler || []).map(d => {
+    const k = kodNormalize(d.kod) || '(boş)';
+    if (secili.includes(k)) { sayi++; return { ...d, kod: hedef }; }
+    return d;
+  });
+  try {
+    await db.collection('sevkiyatlar').doc(fsId).update({ deriler: yeniDeriler });
+    s.deriler = yeniDeriler;
+    const li = state.yoneticiSevkiyatlar?.find(x => x.fsId === fsId);
+    if (li) li.deriler = yeniDeriler;
+    if (state.aktifSevkiyatDetay?.fsId === fsId) state.aktifSevkiyatDetay.deriler = yeniDeriler;
+    document.querySelector('.modal-bg')?.remove();
+    toast(`✓ ${sayi} paket '${hedef}' altında birleştirildi`);
+    render();
+  } catch(e) {
+    toast('❌ Güncellenemedi: ' + e.message, 3000);
+  }
+}
+
 function manuelFisEkle() {
   const fis = {
     id: Date.now() + Math.random(),
@@ -2837,6 +2913,7 @@ function ekranSevkiyatDetay() {
         <button class="btn gold btn-small" onclick="pdfUret('${s.fsId||s.id}', 'A4')">A4 PDF</button>
         <button class="btn secondary btn-small" onclick="pdfUret('${s.fsId||s.id}', 'A5')">A5 PDF</button>
         <button class="btn secondary btn-small" onclick="paylas(state.aktifSevkiyatDetay)">↗ Paylaş</button>
+        ${state.profil?.rol === 'YONETICI' ? `<button class="btn secondary btn-small" onclick="sevkiyatKodBirlestirDialog('${s.fsId}')">🔗 Birleştir</button>` : ''}
         ${state.profil?.rol === 'YONETICI' ? `<button class="btn danger btn-small" onclick="sevkiyatSil('${s.fsId}')">🗑 Sil</button>` : ''}
       </div>
 
