@@ -1068,17 +1068,19 @@ KURAL: Sadece toplam yüzeyi oku. Tek tek deri ölçümlerini gönderme, yuzeyOl
 // Akış: Claude Vision (resim → yapılandırılmış JSON) → parser yedek
 async function ocrYap(imageData, onProgress) {
 
-  // Görseli OCR öncesi 1568px'e küçült — token/maliyet düşer
+  // Görseli OCR öncesi küçült — çözünürlük ayardan seçilebilir (maliyet/hassasiyet dengesi)
+  const cozAyar = await Storage.get('app:ocrCozunurluk') || 'orta';
+  const cozPx = cozAyar === 'dusuk' ? 1024 : (cozAyar === 'yuksek' ? 1568 : 1280);
   let gorsel = imageData;
-  try { gorsel = await gorseliKucult(imageData, 1568, 0.85); } catch(e) {}
+  try { gorsel = await gorseliKucult(imageData, cozPx, 0.8); } catch(e) {}
 
-  // ADIM 1: Claude Vision — önce ucuz Haiku dene, gerekirse Sonnet'e yükselt
+  // ADIM 1: Claude Vision — önce ucuz Haiku dene, sadece güven ÇOK düşükse Sonnet'e yükselt
   try {
     onProgress?.('Claude Vision (Haiku) okuyor...', 0.4);
     const json = await claudeOcr(gorsel, 'claude-haiku-4-5-20251001');
     const veri = dogrula(claudeJsonToInternal(json));
-    // Zor durum: kritik alan eksik veya güven düşük → Sonnet ile yeniden dene
-    if (dogrulamaGerekiyor(veri) || (veri.genelGuven || 0) < 0.7) {
+    // Sadece güven çok düşükse Sonnet ile yeniden dene (maliyeti düşük tutmak için)
+    if ((veri.genelGuven || 0) < 0.5) {
       try {
         onProgress?.('Zor okuma — Sonnet ile yeniden...', 0.6);
         const json2 = await claudeOcr(gorsel, 'claude-sonnet-4-6');
@@ -1317,6 +1319,7 @@ async function ayarlarDialog() {
   const googleKey = await Storage.get('app:googleApiKey') || '';
   const claudeKey = await Storage.get('app:claudeApiKey') || '';
   const pdfBoyut  = await Storage.get('app:pdfBoyut') || 'A4';
+  const ocrCoz    = await Storage.get('app:ocrCozunurluk') || 'orta';
   const fsPlan    = await Storage.get('app:firestorePlan') || 'spark';
   const limitMB   = fsPlan === 'blaze' ? 4096 : 1000;
   // Depolama tahmini: sevkiyat sayısı × ortalama belge boyutu
@@ -1376,6 +1379,19 @@ async function ayarlarDialog() {
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:8px 14px;border:2px solid ${pdfBoyut==='A5'?'var(--leather)':'var(--line)'};border-radius:8px;flex:1;background:var(--bg-card)">
             <input type="radio" name="pdf-boyut" value="A5" ${pdfBoyut==='A5'?'checked':''} onchange="Storage.set('app:pdfBoyut','A5')"> A5
           </label>
+        </div>
+      </div>
+
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--line)">
+        <div style="font-weight:700;font-size:13px;margin-bottom:4px">📷 OCR Görsel Kalitesi (maliyet/hassasiyet)</div>
+        <div style="font-size:11px;color:var(--ink-faint);margin-bottom:8px">Düşük = daha ucuz · Yüksek = zor/silik kodlarda daha hassas</div>
+        <div style="display:flex;gap:6px">
+          ${[['dusuk','Düşük','1024px · en ucuz'],['orta','Orta','1280px · dengeli'],['yuksek','Yüksek','1568px · hassas']].map(([v,ad,aciklama])=>`
+          <label style="display:flex;flex-direction:column;gap:2px;cursor:pointer;padding:8px 10px;border:2px solid ${ocrCoz===v?'var(--leather)':'var(--line)'};border-radius:8px;flex:1;background:var(--bg-card);text-align:center">
+            <input type="radio" name="ocr-coz" value="${v}" ${ocrCoz===v?'checked':''} onchange="Storage.set('app:ocrCozunurluk','${v}');document.querySelector('.modal-bg').remove();ayarlarDialog()" style="margin:0 auto">
+            <span style="font-weight:700;font-size:13px">${ad}</span>
+            <span style="font-size:10px;color:var(--ink-faint)">${aciklama}</span>
+          </label>`).join('')}
         </div>
       </div>
 
@@ -1834,18 +1850,17 @@ async function kameraAc() {
   } catch(e) { dosyaKameraAc(); return; }
   _kameraStream = stream;
   const mbg = document.createElement('div');
-  mbg.className = 'modal-bg kamera-modal';
-  mbg.style.cssText = 'background:#000;z-index:9999;display:flex;flex-direction:column;padding:0';
+  mbg.className = 'kamera-modal';
+  mbg.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#000;display:flex;flex-direction:column;align-items:stretch;justify-content:space-between';
   mbg.innerHTML = `
-    <div style="position:relative;flex:1;overflow:hidden;display:flex;align-items:center;justify-content:center">
+    <div style="position:relative;flex:1;min-height:0;overflow:hidden;display:flex;align-items:center;justify-content:center">
       <video id="kamera-video" playsinline autoplay muted style="width:100%;height:100%;object-fit:contain"></video>
-      <div id="kamera-sayac" style="position:absolute;top:16px;left:16px;background:rgba(0,0,0,0.6);color:#fff;font-weight:700;padding:6px 12px;border-radius:999px;font-size:14px">${state.aktifFisler.length} fiş</div>
+      <div id="kamera-sayac" style="position:absolute;top:18px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.65);color:#fff;font-weight:800;padding:8px 18px;border-radius:999px;font-size:22px">${state.aktifFisler.length} fiş</div>
       <div id="kamera-flash" style="position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none"></div>
     </div>
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 24px;background:#000">
-      <button onclick="kameraKapat()" style="color:#fff;background:none;border:none;font-size:16px;font-weight:700">✓ Bitir</button>
-      <div onclick="kameraCek()" style="width:74px;height:74px;border-radius:50%;background:#fff;border:5px solid rgba(255,255,255,0.35);cursor:pointer"></div>
-      <div style="width:54px;font-size:11px;color:#bbb;text-align:right;line-height:1.3">Sürekli<br>çekim</div>
+    <div style="position:relative;display:flex;align-items:center;justify-content:center;padding:22px 16px;background:#000;flex:0 0 auto">
+      <button onclick="kameraKapat()" style="position:absolute;left:22px;top:50%;transform:translateY(-50%);color:#fff;background:rgba(255,255,255,0.15);border:none;font-size:15px;font-weight:700;padding:12px 18px;border-radius:999px">✓ Bitir</button>
+      <div onclick="kameraCek()" style="width:76px;height:76px;border-radius:50%;background:#fff;border:5px solid rgba(255,255,255,0.35);cursor:pointer"></div>
     </div>`;
   document.body.appendChild(mbg);
   const video = document.getElementById('kamera-video');
