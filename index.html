@@ -498,7 +498,7 @@ YALNIZCA JSON döndür, başka hiçbir şey yazma:
   "cins": "ürün cinsi — DLP RUGAN, NATUREL ZENIT, MILANO, ASTAR gibi (birden fazla kelime olabilir)",
   "renk": "SIYAH, KAHVE, BEYAZ vb.",
   "kod": "'Kod:' etiketinden sonraki alfanümerik kod (örn. 4160 200) — boş olabilir",
-  "kalite": "A, A2, ECO, ECO2, B, C arasından biri",
+  "kalite": "'Kalite:' etiketinden sonraki değer. A, A2, B, C, ECO, ECO2 olabilir. DİKKAT: 'ECO' veya 'ECO2' çoğu zaman ayrı bir damga/kaşe ya da el yazısı olarak da bulunur — etiketin herhangi bir yerinde 'ECO' geçiyorsa kalite ECO'dur, atlama.",
   "seriNo": "T1 N. satırındaki rakamlar, baştaki sıfırlar dahil (örn: 000000001)",
   "barkod": "barkod altındaki rakamlar (10-14 hane)",
   "deriAdedi": <tam sayı>,
@@ -1226,6 +1226,22 @@ function toast(metin, sure = 2200) {
   document.body.appendChild(el);
   setTimeout(() => el.remove(), sure);
 }
+
+// Geri-al butonlu toast
+function toastAksiyon(metin, butonMetin, cb, sure = 7000) {
+  document.querySelectorAll('.toast-aksiyon').forEach(e => e.remove());
+  const el = document.createElement('div');
+  el.className = 'toast toast-aksiyon';
+  el.style.cssText = 'display:flex;align-items:center;gap:14px;z-index:10000';
+  const span = document.createElement('span'); span.textContent = metin;
+  const btn = document.createElement('button');
+  btn.textContent = butonMetin;
+  btn.style.cssText = 'background:var(--gold,#e0a94f);color:#2a1e12;border:none;font-weight:800;padding:6px 14px;border-radius:8px;cursor:pointer;flex-shrink:0';
+  btn.onclick = () => { el.remove(); cb(); };
+  el.appendChild(span); el.appendChild(btn);
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), sure);
+}
 function dosyayiBase64(dosya) {
   return new Promise(resolve => {
     const r = new FileReader();
@@ -1855,8 +1871,9 @@ async function kameraAc() {
   mbg.innerHTML = `
     <div style="position:relative;flex:1;min-height:0;overflow:hidden;display:flex;align-items:center;justify-content:center">
       <video id="kamera-video" playsinline autoplay muted style="width:100%;height:100%;object-fit:contain"></video>
-      <div id="kamera-sayac" style="position:absolute;top:18px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.65);color:#fff;font-weight:800;padding:8px 18px;border-radius:999px;font-size:22px">${state.aktifFisler.length} fiş</div>
+      <div id="kamera-sayac" style="position:absolute;top:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.6);color:#fff;font-weight:900;padding:6px 24px;border-radius:16px;font-size:46px;line-height:1.1;text-align:center">${state.aktifFisler.length}<span style="font-size:15px;font-weight:700;display:block;margin-top:-4px">fiş</span></div>
       <div id="kamera-flash" style="position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none"></div>
+      <div id="kamera-onay" style="position:absolute;inset:0;background:#000;display:none;flex-direction:column"></div>
     </div>
     <div style="position:relative;display:flex;align-items:center;justify-content:center;padding:22px 16px;background:#000;flex:0 0 auto">
       <button onclick="kameraKapat()" style="position:absolute;left:22px;top:50%;transform:translateY(-50%);color:#fff;background:rgba(255,255,255,0.15);border:none;font-size:15px;font-weight:700;padding:12px 18px;border-radius:999px">✓ Bitir</button>
@@ -1866,6 +1883,18 @@ async function kameraAc() {
   const video = document.getElementById('kamera-video');
   video.srcObject = stream;
   try { await video.play(); } catch(e) {}
+  window.addEventListener('keydown', _kameraTus, true);
+}
+
+// Ses açma/kısma tuşları ve boşluk/enter ile çekim (cihaz destekliyorsa)
+function _kameraTus(e) {
+  if (['AudioVolumeUp','AudioVolumeDown','VolumeUp','VolumeDown',' ','Enter'].includes(e.key)) {
+    e.preventDefault();
+    // Onay ekranı açıksa çekim yapma
+    const onay = document.getElementById('kamera-onay');
+    if (onay && onay.style.display !== 'none') return;
+    kameraCek();
+  }
 }
 
 function dosyaKameraAc() {
@@ -1886,15 +1915,44 @@ function kameraCek() {
   const fl = document.getElementById('kamera-flash');
   if (fl) { fl.style.transition = 'none'; fl.style.opacity = '0.85';
     requestAnimationFrame(() => { fl.style.transition = 'opacity 0.35s'; fl.style.opacity = '0'; }); }
-  // Kuyruğa ekle — render etmeden (kamera açık kalsın), OCR arka planda
+  // Çekilen fotoğrafı onaya sun
+  kameraOnayGoster(fotoData);
+}
+
+function kameraOnayGoster(fotoData) {
+  const onay = document.getElementById('kamera-onay');
+  if (!onay) return;
+  onay.style.display = 'flex';
+  onay.innerHTML = `
+    <div style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden">
+      <img src="${fotoData}" style="max-width:100%;max-height:100%;object-fit:contain">
+    </div>
+    <div style="display:flex;gap:10px;padding:16px 18px">
+      <button onclick="kameraTekrar()" style="flex:1;background:rgba(255,255,255,0.15);color:#fff;border:none;font-size:16px;font-weight:700;padding:16px;border-radius:12px">✗ Tekrar Çek</button>
+      <button onclick="kameraOnayla()" style="flex:2;background:var(--green);color:#fff;border:none;font-size:17px;font-weight:800;padding:16px;border-radius:12px">✓ Onayla → Devam</button>
+    </div>`;
+  onay.dataset.foto = fotoData;
+}
+
+function kameraTekrar() {
+  const onay = document.getElementById('kamera-onay');
+  if (onay) { onay.style.display = 'none'; onay.innerHTML = ''; onay.dataset.foto = ''; }
+}
+
+function kameraOnayla() {
+  const onay = document.getElementById('kamera-onay');
+  const fotoData = onay?.dataset.foto;
+  if (!fotoData) { kameraTekrar(); return; }
   const fis = { id: Date.now() + Math.random(), durum: 'beklemede', foto: fotoData, veri: null, hata: null, kaynak: null, olusturma: Date.now() };
   state.aktifFisler.push(fis);
   const sayac = document.getElementById('kamera-sayac');
-  if (sayac) sayac.textContent = `${state.aktifFisler.length} fiş`;
+  if (sayac) sayac.innerHTML = `${state.aktifFisler.length}<span style="font-size:15px;font-weight:700;display:block;margin-top:-4px">fiş</span>`;
+  kameraTekrar();      // onay ekranını kapat, canlı görüntüye dön
   islemKuyruguIsle();
 }
 
 function kameraKapat() {
+  window.removeEventListener('keydown', _kameraTus, true);
   if (_kameraStream) { _kameraStream.getTracks().forEach(t => t.stop()); _kameraStream = null; }
   document.querySelector('.kamera-modal')?.remove();
   render();
@@ -1950,14 +2008,25 @@ function fisBirlestirUygula() {
   const hedef = kodNormalize(document.getElementById('birlestir-hedef')?.value);
   if (secili.length < 1 || !hedef) { toast('Kod seçin ve hedef kodu girin'); return; }
   let sayi = 0;
+  const oncesi = []; // geri al için
   state.aktifFisler.forEach(f => {
     if (f.durum !== 'hazir' && f.durum !== 'onaylandi') return;
     const k = kodNormalize(f.veri?.kod?.deger) || '(boş)';
-    if (secili.includes(k)) { f.veri.kod.deger = hedef; f.veri.kod.guven = 0.99; sayi++; }
+    if (secili.includes(k)) {
+      oncesi.push({ id: f.id, kod: f.veri.kod.deger, guven: f.veri.kod.guven });
+      f.veri.kod.deger = hedef; f.veri.kod.guven = 0.99; sayi++;
+    }
   });
   document.querySelector('.modal-bg')?.remove();
-  toast(`✓ ${sayi} paket '${hedef}' altında birleştirildi`);
   render();
+  toastAksiyon(`✓ ${sayi} paket '${hedef}' altında birleştirildi`, '↩ Geri Al', () => {
+    oncesi.forEach(o => {
+      const f = state.aktifFisler.find(x => x.id === o.id);
+      if (f) { f.veri.kod.deger = o.kod; f.veri.kod.guven = o.guven; }
+    });
+    render();
+    toast('Birleştirme geri alındı');
+  });
 }
 
 // ====== KAYITLI SEVKİYATTA KOD BİRLEŞTİR (Firestore günceller) ======
@@ -2005,6 +2074,7 @@ async function sevkiyatKodBirlestirUygula(fsId) {
   const s = state.yoneticiSevkiyatlar?.find(x => x.fsId === fsId) || state.aktifSevkiyatDetay;
   if (!s) { toast('Sevkiyat bulunamadı'); return; }
   let sayi = 0;
+  const oncekiDeriler = (s.deriler || []).map(d => ({ ...d })); // geri al için kopya
   const yeniDeriler = (s.deriler || []).map(d => {
     const k = kodNormalize(d.kod) || '(boş)';
     if (secili.includes(k)) { sayi++; return { ...d, kod: hedef }; }
@@ -2017,8 +2087,17 @@ async function sevkiyatKodBirlestirUygula(fsId) {
     if (li) li.deriler = yeniDeriler;
     if (state.aktifSevkiyatDetay?.fsId === fsId) state.aktifSevkiyatDetay.deriler = yeniDeriler;
     document.querySelector('.modal-bg')?.remove();
-    toast(`✓ ${sayi} paket '${hedef}' altında birleştirildi`);
     render();
+    toastAksiyon(`✓ ${sayi} paket '${hedef}' altında birleştirildi`, '↩ Geri Al', async () => {
+      try {
+        await db.collection('sevkiyatlar').doc(fsId).update({ deriler: oncekiDeriler });
+        s.deriler = oncekiDeriler;
+        if (li) li.deriler = oncekiDeriler;
+        if (state.aktifSevkiyatDetay?.fsId === fsId) state.aktifSevkiyatDetay.deriler = oncekiDeriler;
+        render();
+        toast('Birleştirme geri alındı');
+      } catch(e) { toast('❌ Geri alınamadı: ' + e.message, 3000); }
+    });
   } catch(e) {
     toast('❌ Güncellenemedi: ' + e.message, 3000);
   }
@@ -2829,10 +2908,11 @@ function ekranSevkiyatListesi() {
 
   const liste = sevk.map(s => {
     const onayli = s.kontrolDurumu === 'onaylandi';
+    const kgSayi = (s.deriler||[]).filter(sevkiyatDeriKontrolGerekli).length;
     return `
-    <div class="shipment-item" onclick="sevkiyatDetayAc('${s.fsId}')">
+    <div class="shipment-item" onclick="sevkiyatDetayAc('${s.fsId}')" ${kgSayi ? 'style="border-left:3px solid var(--red)"' : ''}>
       <div class="header"><span class="no">${s.sevkiyatNo}</span><span class="date">${tarihKisa(s.tarih)}</span></div>
-      <div class="customer">${escapeHtml(s.musteriAd||'')} ${onayli ? '<span style="font-size:11px;color:var(--green);font-weight:700">✓ Onaylı</span>' : '<span style="font-size:11px;color:var(--amber);font-weight:700">⏳ Bekliyor</span>'}</div>
+      <div class="customer">${escapeHtml(s.musteriAd||'')} ${onayli ? '<span style="font-size:11px;color:var(--green);font-weight:700">✓ Onaylı</span>' : '<span style="font-size:11px;color:var(--amber);font-weight:700">⏳ Bekliyor</span>'} ${kgSayi ? `<span style="font-size:11px;color:var(--red);font-weight:700">⚠ ${kgSayi} kontrol</span>` : ''}</div>
       <div class="totals">
         <span>📦 ${(s.deriler||[]).length} paket</span>
         <span>🐂 ${s.toplamAdet} deri</span>
@@ -2932,27 +3012,141 @@ function ekranSevkiyatDetay() {
         ${state.profil?.rol === 'YONETICI' ? `<button class="btn danger btn-small" onclick="sevkiyatSil('${s.fsId}')">🗑 Sil</button>` : ''}
       </div>
 
+      ${(() => {
+        const kontrolGerekli = (s.deriler||[]).map((d,i)=>({d,i})).filter(x => sevkiyatDeriKontrolGerekli(x.d));
+        if (!kontrolGerekli.length) return '';
+        return `<div style="background:rgba(220,38,38,0.08);border:1px solid var(--red);border-radius:10px;padding:12px 14px;margin-bottom:12px">
+          <div style="font-weight:700;color:var(--red);margin-bottom:6px">⚠ Kontrol Edilmesi Gerekenler (${kontrolGerekli.length})</div>
+          <div style="font-size:12px;color:var(--ink-soft);margin-bottom:8px">Eksik/şüpheli okunmuş paketler — dokunup düzeltin.</div>
+          ${kontrolGerekli.map(x => `<button onclick="sevkiyatDeriDuzenle('${s.fsId}',${x.i})" style="display:block;width:100%;text-align:left;background:var(--bg-card);border:1px solid var(--red);border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:13px;cursor:pointer">
+            <b>#${x.i+1}</b> ${escapeHtml(x.d.cins||'?')} · ${escapeHtml(x.d.renk||'?')} · ${escapeHtml(x.d.kalite||'?')} — <span style="color:var(--red)">düzelt ›</span></button>`).join('')}
+        </div>`;
+      })()}
+
       <div class="section-title">Ürün Grupları (${gruplar.length})</div>
       ${grupHtml}
 
       <details style="margin-top:12px" open>
-        <summary style="cursor:pointer;font-size:13px;color:var(--ink-soft);padding:8px 0">📋 Tüm Paketler (${(s.deriler||[]).length}) — fotoğraf için 📷'ye dokunun</summary>
+        <summary style="cursor:pointer;font-size:13px;color:var(--ink-soft);padding:8px 0">📋 Tüm Paketler (${(s.deriler||[]).length}) — düzenle ✏, sil 🗑, fotoğraf 📷</summary>
         <div style="background:var(--bg-card);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:6px">
         ${(s.deriler||[]).map((d,i) => {
           const varFoto = fotoIdx.includes(i);
+          const kg = sevkiyatDeriKontrolGerekli(d);
           return `
-          <div ${varFoto ? `onclick="paketFotoGoster('${s.fsId}',${i})"` : ''} style="padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;display:flex;gap:8px;align-items:center${varFoto ? ';cursor:pointer' : ''}">
-            <span style="width:24px;color:var(--ink-faint);font-weight:700">${i+1}</span>
-            <span style="flex:1">${escapeHtml(d.cins||'')} · ${escapeHtml(d.renk||'')} · ${escapeHtml(d.kalite||'')}</span>
-            <span class="mono">${d.deriAdedi}ad</span>
+          <div style="padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;display:flex;gap:6px;align-items:center${kg ? ';background:rgba(220,38,38,0.08);border-left:3px solid var(--red)' : ''}">
+            <span style="width:22px;color:${kg?'var(--red)':'var(--ink-faint)'};font-weight:700">${kg?'⚠':''}${i+1}</span>
+            <span style="flex:1;min-width:0" onclick="sevkiyatDeriDuzenle('${s.fsId}',${i})">${escapeHtml(d.cins||'?')} · ${escapeHtml(d.renk||'?')} · ${escapeHtml(d.kalite||'?')}</span>
+            <span class="mono">${d.deriAdedi||0}ad</span>
             <span class="mono" style="font-weight:700">${sayiFormatla(d.toplamYuzeyDm2||0)}</span>
-            <span class="mono" style="color:var(--ink-faint);font-size:11px">${(d.toplamYuzeyFt2||0).toFixed(2)}</span>
-            <span style="width:22px;text-align:center;font-size:15px">${varFoto ? '📷' : '<span style=\"color:var(--ink-faint);font-size:11px\">—</span>'}</span>
+            ${varFoto ? `<span onclick="paketFotoGoster('${s.fsId}',${i})" style="cursor:pointer;font-size:16px">📷</span>` : ''}
+            <span onclick="sevkiyatDeriDuzenle('${s.fsId}',${i})" style="cursor:pointer;font-size:15px">✏️</span>
+            <span onclick="sevkiyatDeriSil('${s.fsId}',${i})" style="cursor:pointer;font-size:15px">🗑</span>
           </div>`;
         }).join('')}
         </div>
       </details>
     </div>`;
+}
+
+// Kayıtlı sevkiyat paketinin eksik/şüpheli olup olmadığı
+function sevkiyatDeriKontrolGerekli(d) {
+  if (!d) return false;
+  if (!d.cins || !d.renk) return true;
+  if (!d.kalite) return true;
+  if (!(d.deriAdedi > 0)) return true;
+  if (!((d.toplamYuzeyDm2 || 0) > 0 || (d.toplamYuzeyFt2 || 0) > 0)) return true;
+  return false;
+}
+
+function sevkiyatTotalleriYenile(s) {
+  s.toplamAdet = (s.deriler||[]).reduce((a,d)=>a+(d.deriAdedi||0),0);
+  s.toplamYuzeyDm2 = (s.deriler||[]).reduce((a,d)=>a+(d.toplamYuzeyDm2||0),0);
+  s.toplamYuzeyFt2 = (s.deriler||[]).reduce((a,d)=>a+(d.toplamYuzeyFt2||0),0);
+  s.toplamYuzey = s.toplamYuzeyDm2;
+}
+
+function sevkiyatDeriDuzenle(fsId, i) {
+  const s = state.aktifSevkiyatDetay || state.yoneticiSevkiyatlar?.find(x=>x.fsId===fsId) || state.sevkiyatlar?.find(x=>x.fsId===fsId);
+  const d = s?.deriler?.[i];
+  if (!d) { toast('Paket bulunamadı'); return; }
+  const mbg = document.createElement('div');
+  mbg.className = 'modal-bg';
+  mbg.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal-handle"></div>
+      <h2 style="margin-bottom:12px">Paket #${i+1} Düzenle</h2>
+      <div class="input-group"><label class="input-label">Cins</label><input class="input" id="sd-cins" value="${escapeHtml(d.cins||'')}"></div>
+      <div class="input-group"><label class="input-label">Renk</label><input class="input" id="sd-renk" value="${escapeHtml(d.renk||'')}"></div>
+      <div class="input-group"><label class="input-label">Kod</label><input class="input mono" id="sd-kod" value="${escapeHtml(d.kod||'')}"></div>
+      <div class="flex gap-2">
+        <div class="input-group grow"><label class="input-label">Kalite</label><input class="input mono" id="sd-kalite" value="${escapeHtml(d.kalite||'')}"></div>
+        <div class="input-group grow"><label class="input-label">Deri Adedi</label><input class="input mono" id="sd-adet" type="number" value="${d.deriAdedi||''}"></div>
+      </div>
+      <div class="flex gap-2">
+        <div class="input-group grow"><label class="input-label">Toplam dm²</label><input class="input mono" id="sd-dm2" type="number" step="0.1" value="${d.toplamYuzeyDm2?d.toplamYuzeyDm2.toFixed(1):''}"></div>
+        <div class="input-group grow"><label class="input-label">Toplam ft²</label><input class="input mono" id="sd-ft2" type="number" step="0.01" value="${d.toplamYuzeyFt2?d.toplamYuzeyFt2.toFixed(2):''}"></div>
+      </div>
+      <div class="flex gap-2 mt-4">
+        <button class="btn secondary" onclick="document.querySelector('.modal-bg').remove()">İptal</button>
+        <button class="btn green" style="flex:2" onclick="sevkiyatDeriKaydet('${fsId}',${i})">✓ Kaydet</button>
+      </div>
+    </div>`;
+  mbg.onclick = () => mbg.remove();
+  document.body.appendChild(mbg);
+}
+
+async function sevkiyatDeriKaydet(fsId, i) {
+  const s = state.aktifSevkiyatDetay || state.yoneticiSevkiyatlar?.find(x=>x.fsId===fsId) || state.sevkiyatlar?.find(x=>x.fsId===fsId);
+  if (!s?.deriler?.[i]) { toast('Paket bulunamadı'); return; }
+  const dm2 = parseFloat(document.getElementById('sd-dm2').value) || 0;
+  let ft2 = parseFloat(document.getElementById('sd-ft2').value) || 0;
+  if (!ft2 && dm2) ft2 = parseFloat((dm2/9.2903).toFixed(2));
+  const yeniDeriler = s.deriler.map((x,ix) => ix===i ? {
+    ...x,
+    cins: document.getElementById('sd-cins').value.trim(),
+    renk: document.getElementById('sd-renk').value.trim(),
+    kod: kodNormalize(document.getElementById('sd-kod').value),
+    kalite: document.getElementById('sd-kalite').value.trim().toUpperCase(),
+    deriAdedi: parseInt(document.getElementById('sd-adet').value) || 0,
+    toplamYuzeyDm2: dm2, toplamYuzeyFt2: ft2
+  } : x);
+  const guncel = { deriler: yeniDeriler };
+  const tmp = { deriler: yeniDeriler }; sevkiyatTotalleriYenile(tmp);
+  guncel.toplamAdet = tmp.toplamAdet; guncel.toplamYuzeyDm2 = tmp.toplamYuzeyDm2;
+  guncel.toplamYuzeyFt2 = tmp.toplamYuzeyFt2; guncel.toplamYuzey = tmp.toplamYuzey;
+  try {
+    await db.collection('sevkiyatlar').doc(fsId).update(guncel);
+    s.deriler = yeniDeriler; sevkiyatTotalleriYenile(s);
+    [state.yoneticiSevkiyatlar, state.sevkiyatlar].forEach(arr => {
+      const li = arr?.find(x=>x.fsId===fsId);
+      if (li && li !== s) { li.deriler = yeniDeriler; sevkiyatTotalleriYenile(li); }
+    });
+    document.querySelector('.modal-bg')?.remove();
+    toast('✓ Paket güncellendi');
+    render();
+  } catch(e) { toast('❌ Güncellenemedi: ' + e.message, 3000); }
+}
+
+async function sevkiyatDeriSil(fsId, i) {
+  const s = state.aktifSevkiyatDetay || state.yoneticiSevkiyatlar?.find(x=>x.fsId===fsId) || state.sevkiyatlar?.find(x=>x.fsId===fsId);
+  if (!s?.deriler?.[i]) { toast('Paket bulunamadı'); return; }
+  if (!confirm(`#${i+1} paket silinecek. Emin misiniz?`)) return;
+  const yeniDeriler = s.deriler.filter((_,ix)=>ix!==i);
+  // Foto indekslerini de kaydır
+  const yeniFotoIdx = (s.fotoIndeksleri||[]).filter(x=>x!==i).map(x=>x>i?x-1:x);
+  const tmp = { deriler: yeniDeriler }; sevkiyatTotalleriYenile(tmp);
+  try {
+    await db.collection('sevkiyatlar').doc(fsId).update({
+      deriler: yeniDeriler, fotoIndeksleri: yeniFotoIdx,
+      toplamAdet: tmp.toplamAdet, toplamYuzeyDm2: tmp.toplamYuzeyDm2,
+      toplamYuzeyFt2: tmp.toplamYuzeyFt2, toplamYuzey: tmp.toplamYuzey
+    });
+    [s, state.yoneticiSevkiyatlar?.find(x=>x.fsId===fsId), state.sevkiyatlar?.find(x=>x.fsId===fsId)].forEach(o=>{
+      if (o) { o.deriler = yeniDeriler; o.fotoIndeksleri = yeniFotoIdx; sevkiyatTotalleriYenile(o); }
+    });
+    toast('✓ Paket silindi');
+    render();
+  } catch(e) { toast('❌ Silinemedi: ' + e.message, 3000); }
 }
 
 // ====== YÖNETİCİ KONTROL + FOTOĞRAF ======
@@ -3436,10 +3630,12 @@ function sevkiyatKarti(s) {
 
 function sevkiyatKartiOnay(s) {
   const paketSayisi = (s.deriler||[]).length || (s.fotoSayisi > 0 ? s.fotoSayisi : '?');
+  const kgSayi = (s.deriler||[]).filter(sevkiyatDeriKontrolGerekli).length;
   return `<div class="shipment-item" onclick="yoneticiSevkiyatDetay('${s.fsId}')"
     style="border-left:4px solid var(--amber);background:linear-gradient(135deg,var(--bg-card),var(--amber-soft))">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
       <span style="background:var(--amber);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;text-transform:uppercase">⏳ Onay Bekliyor</span>
+      ${kgSayi ? `<span style="background:var(--red);color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px">⚠ ${kgSayi} kontrol</span>` : ''}
       <span style="font-size:12px;color:var(--ink-faint);margin-left:auto">${tarihFormatla(s.tarih)}</span>
     </div>
     <div style="flex:1">
