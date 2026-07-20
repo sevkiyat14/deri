@@ -1227,20 +1227,24 @@ function toast(metin, sure = 2200) {
   setTimeout(() => el.remove(), sure);
 }
 
-// Geri-al butonlu toast
-function toastAksiyon(metin, butonMetin, cb, sure = 7000) {
+// Geri-al butonlu toast. sure=0 → süresiz (elle kapatılana / işlem yapılana kadar)
+function toastAksiyon(metin, butonMetin, cb, sure = 0) {
   document.querySelectorAll('.toast-aksiyon').forEach(e => e.remove());
   const el = document.createElement('div');
   el.className = 'toast toast-aksiyon';
-  el.style.cssText = 'display:flex;align-items:center;gap:14px;z-index:10000';
-  const span = document.createElement('span'); span.textContent = metin;
+  el.style.cssText = 'display:flex;align-items:center;gap:12px;z-index:10000';
+  const span = document.createElement('span'); span.textContent = metin; span.style.flex = '1';
   const btn = document.createElement('button');
   btn.textContent = butonMetin;
   btn.style.cssText = 'background:var(--gold,#e0a94f);color:#2a1e12;border:none;font-weight:800;padding:6px 14px;border-radius:8px;cursor:pointer;flex-shrink:0';
   btn.onclick = () => { el.remove(); cb(); };
-  el.appendChild(span); el.appendChild(btn);
+  const kapat = document.createElement('button');
+  kapat.textContent = '✕';
+  kapat.style.cssText = 'background:none;border:none;color:#fff;font-size:16px;cursor:pointer;flex-shrink:0;opacity:0.7';
+  kapat.onclick = () => el.remove();
+  el.appendChild(span); el.appendChild(btn); el.appendChild(kapat);
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), sure);
+  if (sure > 0) setTimeout(() => el.remove(), sure);
 }
 function dosyayiBase64(dosya) {
   return new Promise(resolve => {
@@ -1773,7 +1777,7 @@ function ekranTopluCekim() {
     <div class="topbar">
       <button onclick="oturumIptal()" style="font-size:13px">‹ Vazgeç</button>
       <div class="brand mono" style="font-size:14px">${state.oturumNo || 'Yeni Sevkiyat'}</div>
-      ${ist.hazir > 0 ? `<button onclick="incelemeyeGec()" style="background:var(--green);color:#fff;font-weight:700;padding:8px 16px;border-radius:8px;font-size:14px">✕ Kayıt (${ist.hazir})</button>` : '<div style="width:60px"></div>'}
+      ${ist.hazir > 0 ? `<button onclick="incelemeyeGec()" style="background:var(--green);color:#fff;font-weight:700;padding:8px 16px;border-radius:8px;font-size:14px">✓ Kayıt (${ist.hazir})</button>` : '<div style="width:60px"></div>'}
     </div>
     <div class="customer-bar">
       <div><div class="label">Müşteri</div><div class="name">${m.ad}</div></div>
@@ -2168,6 +2172,18 @@ async function ogrenilmistenIyilestir(veri) {
   return veri;
 }
 
+// Kayıt için zorunlu alanlardan biri eksik mi? (cins, renk, kod, kalite, toplam yüzey)
+function fisEksik(f) {
+  const v = f?.veri;
+  if (!v) return true;
+  if (!v.cins?.deger) return true;
+  if (!v.renk?.deger) return true;
+  if (!v.kod?.deger) return true;
+  if (!v.kalite?.deger) return true;
+  if (!((v.toplamYuzeyDm2?.deger || 0) > 0 || (v.toplamYuzeyFt2?.deger || 0) > 0)) return true;
+  return false;
+}
+
 // Fişin doğrulanması gereken kritik sorunları var mı?
 function dogrulamaGerekiyor(veri) {
   if (!veri) return false;
@@ -2511,13 +2527,18 @@ function ekranInceleme() {
     </div>`;
   }).join('');
 
+  // Eksik okunan fişler en üste sabitlenir ve kırmızı gösterilir
+  const eksikSayisi = onayli.filter(fisEksik).length;
+  const siraliOnayli = onayli.slice().sort((a,b) => (fisEksik(b)?1:0) - (fisEksik(a)?1:0));
+
   // Tek tek fişler (düzenleme için tıklanabilir)
-  const fisListesi = onayli.map(f => {
+  const fisListesi = siraliOnayli.map(f => {
     const idx = state.aktifFisler.indexOf(f);
     const v = f.veri;
-    return `<div onclick="fisDuzelt(${idx})" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px">
-      <span style="width:24px;color:var(--ink-faint);font-weight:700">${idx+1}</span>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(v.cins.deger)} · ${escapeHtml(v.kod.deger)} · ${escapeHtml(v.kalite.deger)}</span>
+    const eksik = fisEksik(f);
+    return `<div onclick="fisDuzelt(${idx})" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px${eksik ? ';background:rgba(220,38,38,0.1);border-left:3px solid var(--red)' : ''}">
+      <span style="width:24px;color:${eksik?'var(--red)':'var(--ink-faint)'};font-weight:700">${eksik?'⚠':''}${idx+1}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(v.cins.deger||'?')} · ${escapeHtml(v.kod.deger||'?')} · ${escapeHtml(v.kalite.deger||'?')}</span>
       <span class="mono">${v.deriAdedi.deger}ad</span>
       <span class="mono" style="color:var(--ink-soft)">${(v.toplamYuzeyDm2?.deger||0).toFixed(0)}</span>
     </div>`;
@@ -2557,7 +2578,9 @@ function ekranInceleme() {
       </div>
       ${grupHtml}
 
-      <details style="margin-top:12px">
+      ${eksikSayisi > 0 ? `<div style="background:rgba(220,38,38,0.1);border:1px solid var(--red);border-radius:10px;padding:12px 14px;margin-top:12px;font-size:13px;color:var(--red);font-weight:600">⚠ ${eksikSayisi} fişte eksik bilgi var (cins, renk, kod, kalite veya toplam yüzey). Kaydetmeden önce üstteki kırmızı fişleri düzeltin.</div>` : ''}
+
+      <details style="margin-top:12px" ${eksikSayisi>0?'open':''}>
         <summary style="cursor:pointer;font-size:13px;color:var(--ink-soft);padding:8px 0">📋 Tüm Paketler (${onayli.length}) — düzenlemek için tıklayın</summary>
         <div style="background:var(--bg-card);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:8px">
           ${fisListesi}
@@ -2567,7 +2590,7 @@ function ekranInceleme() {
     <div class="bottom-bar">
       <button class="btn secondary" onclick="ekranGit('toplu-cekim');">Daha Çek</button>
       <button class="btn secondary" onclick="notEkleDialog()" style="padding:14px 12px">📝 Not</button>
-      <button class="btn gold" onclick="sevkiyatKaydet()" ${onayli.length === 0 ? 'disabled' : ''}>Sevkiyatı Kaydet</button>
+      <button class="btn gold" onclick="sevkiyatKaydet()" ${(onayli.length === 0 || eksikSayisi > 0) ? 'disabled' : ''}>${eksikSayisi > 0 ? `⚠ ${eksikSayisi} eksik fiş` : 'Sevkiyatı Kaydet'}</button>
     </div>`;
 }
 
@@ -2592,6 +2615,11 @@ function notEkleDialog() {
 async function sevkiyatKaydet() {
   const onayli = state.aktifFisler.filter(f => f.durum === 'hazir' || f.durum === 'onaylandi');
   if (onayli.length === 0) { toast('Kayıt edilecek onaylı fiş yok', 2000); return; }
+  const eksikler = onayli.filter(fisEksik);
+  if (eksikler.length > 0) {
+    toast(`⚠ ${eksikler.length} fişte eksik bilgi var — kaydetmeden önce düzeltin`, 3500);
+    return;
+  }
   if (state._kayitYapiliyor) return;
   state._kayitYapiliyor = true;
   toast('⏳ Kaydediliyor...', 5000);
